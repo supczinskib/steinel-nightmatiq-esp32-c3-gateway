@@ -1,0 +1,49 @@
+# Secrets
+secrets.yaml
+**/secrets.yaml
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.crt
+
+# ESPHome, PlatformIO and build output
+.esphome/
+**/.esphome/
+.pio/
+**/.pio/
+build/
+**/build/
+.cache/
+**/.cache/
+
+# Private captures and backups
+private-*/
+**/private-*/
+*.apk
+*.pcap
+*.pcapng
+*btsnoop*.log
+*bugreport*.zip
+*backup*.zip
+*backup*.json
+*mesh_frames*.csv
+
+# Archives
+*.tgz
+*.tar.gz
+
+# Operating-system and editor metadata
+._*
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+*~
+__pycache__/
+*.py[cod]
+.pytest_cache/

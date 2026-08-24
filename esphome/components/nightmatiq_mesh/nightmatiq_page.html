@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:">
+<title>Steinel NightmatIQ Gateway</title>
+<style>
+:root{color-scheme:light dark;--bg:#fafafa;--panel:#fff;--text:#222;--muted:#707070;--line:#ddd;--accent:#f39200;--ok:#43a047;--bad:#e53935}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px Arial,sans-serif}.shell{max-width:850px;margin:auto;padding:22px 14px 48px}.head{height:72px;display:flex;align-items:center;justify-content:center;position:relative;text-align:center}.head h1{font-size:22px;margin:0}.head p{font-size:11px;color:var(--muted);margin:5px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:18px;margin:14px 0;box-shadow:0 1px 2px #0002}.status{display:flex;gap:12px;align-items:center}.dot{width:11px;height:11px;border-radius:50%;background:#999}.dot.ok{background:var(--ok)}.dot.bad{background:var(--bad)}h2{font-size:15px;margin:0 0 15px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.field{display:grid;gap:5px}.wide{grid-column:1/-1}label{font-size:11px;color:var(--muted)}input,select{width:100%;height:38px;padding:7px 9px;border:1px solid var(--line);border-radius:4px;background:var(--panel);color:var(--text)}.actions{display:flex;justify-content:flex-end;gap:8px;margin-top:15px;flex-wrap:wrap}button{border:0;border-radius:4px;padding:10px 14px;font-weight:700;cursor:pointer;color:var(--accent);background:transparent}button.primary{background:var(--accent);color:#fff}button.danger{color:var(--bad)}button:disabled,input:disabled,select:disabled{opacity:.45;cursor:not-allowed}.control-grid{display:grid;gap:0}.control-row{min-height:52px;display:grid;grid-template-columns:190px 1fr;gap:16px;align-items:center;border-top:1px solid var(--line)}.control-row:first-child{border-top:0}.control-label{color:var(--muted)}.range-wrap{display:grid;grid-template-columns:1fr 74px;gap:12px;align-items:center}.range-wrap input{padding:0;border:0;accent-color:var(--accent)}.control-help{font-size:11px;color:var(--muted);margin-top:12px}.details{display:grid;grid-template-columns:1fr 1fr;gap:8px;color:var(--muted);font-size:12px}.details b{color:var(--text)}.diagnostics{grid-column:1/-1;color:var(--muted);font-size:12px}.diagnostics summary{cursor:pointer}.diagnostics .details{margin-top:8px}.notice,.ota-status{font-size:12px;line-height:1.5;color:var(--muted)}.notice{border-left:3px solid var(--accent);padding-left:12px}progress{width:100%;height:10px;margin-top:12px;accent-color:var(--accent)}.hidden{display:none}@media(max-width:600px){.grid,.details{grid-template-columns:1fr}.wide{grid-column:auto}.control-row{grid-template-columns:1fr;gap:7px;padding:12px 0}}@media(prefers-color-scheme:dark){:root{--bg:#101010;--panel:#171717;--text:#eee;--muted:#aaa;--line:#3a3a3a}}
+</style>
+</head>
+<body><main class="shell">
+<header class="head"><div><h1>Steinel NightmatIQ Plus</h1><p>Standalone ESP32-C3 Bluetooth Mesh gateway</p></div></header>
+<section class="panel status"><i id="dot" class="dot"></i><div><b id="message">Connecting to gateway…</b><div id="state" style="font-size:11px;color:var(--muted);margin-top:4px"></div></div></section>
+<section id="controls" class="panel hidden"><h2>NightmatIQ control</h2><div class="control-grid">
+<div class="control-row"><label class="control-label" for="modeControl">Mode</label><select id="modeControl"><option value="" disabled selected>Waiting for response</option><option>Auto</option><option>Always On</option><option>Always Off</option></select></div>
+<div class="control-row"><label class="control-label" for="thresholdControl">Twilight threshold</label><div class="range-wrap"><input id="thresholdControl" type="range" min="1" max="1500" step="1" value="1"><b id="thresholdValue">—</b></div></div>
+<div class="control-row"><span class="control-label">Read current state</span><button id="refreshControl">REFRESH</button></div>
+</div><div id="controlHelp" class="control-help">Controls become available when Bluetooth Mesh is ready.</div></section>
+<section id="configured" class="panel hidden"><h2>Installed configuration</h2><div class="details"><span>Network: <b id="networkName">—</b></span><span>Device: <b id="nodeName">—</b></span><span>NightmatIQ address: <b id="nodeAddress">—</b></span><span>Gateway Mesh address: <b id="localAddress">—</b></span><span>IV Index: <b id="savedIv">—</b></span><span>Runtime mode: <b id="runtimeMode">—</b></span><span>Mesh: <b id="meshState">—</b></span><span>Actual light output: <b id="actualOutput">—</b></span><span>Installed firmware: <b id="installedFirmware">—</b></span><span>Hardware revision: <b id="hardwareVersion">—</b></span><span>Manufacturer: <b id="manufacturer">—</b></span><span>Company ID: <b id="companyId">—</b></span><span>Product ID: <b id="productId">—</b></span><details id="diagnostics" class="diagnostics hidden"><summary>Diagnostics</summary><div class="details"><span>Gateway uptime: <b id="gatewayUptime">—</b></span><span>Last reset reason: <b id="resetReason">—</b></span><span>Free internal heap: <b id="freeHeap">—</b></span><span>Largest free block: <b id="largestBlock">—</b></span><span>Mesh transmissions: <b id="meshTx">—</b></span><span>Mesh send errors: <b id="meshTxErrors">—</b></span><span>Mesh responses / timeouts: <b id="meshStats">—</b></span><span>Last Mesh RSSI: <b id="meshRssi">—</b></span><span>Last measured lux: <b id="lastLux">—</b></span><span>Twilight threshold: <b id="twilightThreshold">—</b></span></div></details></div><div class="actions"><button id="disable">DISABLE NIGHTMATIQ</button><button id="enable" class="primary">ENABLE NIGHTMATIQ</button><button id="remove" class="danger">REMOVE CONFIGURATION</button></div></section>
+<section id="setup" class="panel"><h2>1. Steinel Cloud account</h2><div class="grid"><div class="field"><label>Email</label><input id="email" type="email" autocomplete="username"></div><div class="field"><label>Password</label><input id="password" type="password" autocomplete="current-password"></div></div><div class="actions"><button id="discover" class="primary">DOWNLOAD NETWORK LIST</button></div></section>
+<section id="installPanel" class="panel hidden"><h2>2. Select and install</h2><div class="grid"><div class="field wide"><label>Steinel network</label><select id="network"></select></div><div class="field"><label>NightmatIQ node address (optional)</label><input id="node" placeholder="Automatic, e.g. 0002" maxlength="6"></div><div class="field"><label>Known IV Index (optional)</label><input id="iv" type="number" min="0" max="4294967295" value="0"></div></div><div class="actions"><button id="install" class="primary">INSTALL ON GATEWAY</button></div></section>
+<section class="panel"><h2>Firmware update</h2><div class="field"><label>ESPHome firmware file (.bin)</label><input id="firmware" type="file" accept=".bin,application/octet-stream"></div><progress id="otaProgress" class="hidden" max="100" value="0"></progress><div id="otaStatus" class="ota-status">The gateway will verify the image, install it and restart automatically.</div><div class="actions"><button id="otaUpdate" class="primary">INSTALL UPDATE</button></div></section>
+<section class="panel notice"><b>Disabling NightmatIQ keeps the saved configuration and allows it to be enabled again later.</b> <b>Credentials are never saved.</b> They remain in this browser form only for the two HTTPS requests to Steinel Cloud. This page uses local HTTP, so perform setup and updates only on a trusted LAN.</section>
+</main>
+<script>
+const q=s=>document.querySelector(s),message=q('#message'),dot=q('#dot'),state=q('#state'),discover=q('#discover'),install=q('#install'),enable=q('#enable'),disable=q('#disable'),remove=q('#remove'),select=q('#network'),firmware=q('#firmware'),otaUpdate=q('#otaUpdate'),otaProgress=q('#otaProgress'),otaStatus=q('#otaStatus'),modeControl=q('#modeControl'),thresholdControl=q('#thresholdControl'),thresholdValue=q('#thresholdValue'),refreshControl=q('#refreshControl');let lastNetworks='',otaBusy=false,otaTransferred=false,controlBusy=false,lastStatus=null;
+const otaRestart=()=>{otaProgress.value=100;otaStatus.textContent='Upload complete. The gateway is restarting…';message.textContent='Firmware update installed; restarting gateway';dot.className='dot ok'};
+const values=()=>{const p=new URLSearchParams;p.set('email',q('#email').value);p.set('password',q('#password').value);return p};
+async function post(url,p){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p}),j=await r.json();if(!r.ok)throw Error(j.message||`HTTP ${r.status}`);return j}
+async function poll(){
+  if(otaBusy)return;
+  try{
+    const r=await fetch('/steinel/status',{cache:'no-store'}),j=await r.json();
+    if(!r.ok)throw Error(j.message||'Status unavailable');
+    message.textContent=j.message;
+    dot.className=`dot ${j.mesh_ready||(!j.enabled&&j.configured)?'ok':j.configured?'':'bad'}`;
+    state.textContent=j.busy?'Cloud operation in progress':j.enabled?(j.mesh_ready?'Bluetooth Mesh ready':'Waiting for Mesh synchronization'):(j.configured?'NightmatIQ disabled · Setup mode':'Setup mode · NightmatIQ not configured');
+    q('#diagnostics').classList.toggle('hidden',!j.extended_diagnostics);
+    if(j.extended_diagnostics){
+      const uptime=j.gateway_uptime_seconds||0;q('#gatewayUptime').textContent=`${Math.floor(uptime/3600)}h ${Math.floor((uptime%3600)/60)}m ${uptime%60}s`;
+      q('#resetReason').textContent=j.gateway_reset_reason||'Unknown';
+      q('#freeHeap').textContent=`${j.free_internal_heap||0} B`;
+      q('#largestBlock').textContent=`${j.largest_internal_block||0} B`;
+      q('#meshTx').textContent=`${j.mesh_tx_accepted||0} / ${j.mesh_tx_attempts||0}`;
+      q('#meshTxErrors').textContent=`${j.mesh_tx_errors||0} (last ${j.mesh_last_tx_error||0})`;
+      q('#meshStats').textContent=`${j.mesh_rx_messages||0} / ${j.mesh_timeouts||0}`;
+      q('#meshRssi').textContent=j.mesh_rssi_received?`${j.mesh_last_rssi_dbm} dBm · ${j.mesh_last_rssi_age_seconds||0}s ago`:'—';
+      q('#lastLux').textContent=j.lux_received?`${(j.last_lux_centilux/100).toFixed(2)} lx`:'—';
+      q('#twilightThreshold').textContent=j.threshold_received?`${(j.threshold_centilux/100).toFixed(2)} lx`:'—';
+    }
+    q('#configured').classList.toggle('hidden',!j.configured);
+    q('#controls').classList.toggle('hidden',!j.configured);
+    q('#setup').classList.toggle('hidden',j.configured);
+    if(j.configured){
+      q('#networkName').textContent=j.network;
+      q('#nodeName').textContent=j.node;
+      q('#nodeAddress').textContent=j.node_address;
+      q('#localAddress').textContent=j.local_address;
+      q('#savedIv').textContent=`${j.iv_index}${j.iv_index_confirmed?' · Confirmed':' · Synchronizing'}`;
+      q('#runtimeMode').textContent=j.runtime_mode;
+      q('#meshState').textContent=j.enabled?(j.mesh_ready?'Ready':'Synchronizing'):'Disabled';
+      q('#actualOutput').textContent=j.actual_output_known?(j.actual_output_on?'ON':'OFF'):'Waiting for response';
+      if(j.mode_known&&document.activeElement!==modeControl)modeControl.value=j.mode;
+      if(j.threshold_received&&document.activeElement!==thresholdControl){const threshold=Math.round(j.threshold_centilux/100);thresholdControl.value=threshold;thresholdValue.textContent=`${threshold} lx`}else if(!j.threshold_received&&document.activeElement!==thresholdControl)thresholdValue.textContent='—';
+      q('#installedFirmware').textContent=j.firmware_version_known?j.firmware_version:'Waiting for device report';
+      q('#hardwareVersion').textContent=j.hardware_version_known?j.hardware_version:'Waiting for device report';
+      q('#manufacturer').textContent=j.composition_received&&j.company_id==='0563'?'Steinel GmbH':'—';
+      q('#companyId').textContent=j.composition_received?`0x${j.company_id}${j.company_id==='0563'?' (Steinel GmbH)':''}`:'—';
+      q('#productId').textContent=j.composition_received?`0x${j.product_id}`:'—';
+      enable.classList.toggle('hidden',j.enabled);
+      disable.classList.toggle('hidden',!j.enabled)
+    }
+    lastStatus=j;
+    const controlEnabled=j.configured&&j.enabled&&j.mesh_ready&&!j.busy&&!controlBusy;
+    [modeControl,thresholdControl,refreshControl].forEach(control=>control.disabled=!controlEnabled);
+    q('#controlHelp').textContent=controlEnabled?'Commands are sent locally over Bluetooth Mesh.':j.configured&&!j.enabled?'Enable NightmatIQ to use controls.':'Controls become available when Bluetooth Mesh is ready.';
+    const serialized=JSON.stringify(j.networks||[]);
+    if(serialized!==lastNetworks){lastNetworks=serialized;select.replaceChildren(...j.networks.map(n=>new Option(`${n.name} · ${n.nodes} device${n.nodes===1?'':'s'} · ${n.last_update}`,n.id)))}
+    q('#installPanel').classList.toggle('hidden',j.configured||!j.networks.length);
+    [discover,install,enable,disable,remove].forEach(b=>b.disabled=j.busy)
+  }catch(e){message.textContent=e.message;dot.className='dot bad'}
+}
+discover.onclick=async()=>{try{discover.disabled=true;await post('/steinel/discover',values());poll()}catch(e){message.textContent=e.message;dot.className='dot bad';discover.disabled=false}};
+install.onclick=async()=>{try{const p=values();p.set('network_id',select.value);p.set('node_address',q('#node').value.trim());p.set('iv_index',q('#iv').value||'0');install.disabled=true;await post('/steinel/install',p);poll()}catch(e){message.textContent=e.message;dot.className='dot bad';install.disabled=false}};
+enable.onclick=async()=>{if(!confirm('Enable NightmatIQ and reboot the gateway into Bluetooth Mesh mode?'))return;try{await post('/steinel/enable',new URLSearchParams);poll()}catch(e){message.textContent=e.message;dot.className='dot bad'}};
+disable.onclick=async()=>{if(!confirm('Disable NightmatIQ, preserve its configuration and reboot the gateway into setup mode?'))return;try{await post('/steinel/disable',new URLSearchParams);poll()}catch(e){message.textContent=e.message;dot.className='dot bad'}};
+remove.onclick=async()=>{if(!confirm('Remove the saved NightmatIQ Mesh configuration?'))return;try{await post('/steinel/remove',new URLSearchParams);poll()}catch(e){message.textContent=e.message;dot.className='dot bad'}};
+async function sendControl(url,params){try{controlBusy=true;[modeControl,thresholdControl,refreshControl].forEach(control=>control.disabled=true);const result=await post(url,params);message.textContent=result.message;await poll()}catch(e){message.textContent=e.message;dot.className='dot bad'}finally{controlBusy=false;if(lastStatus){const enabled=lastStatus.configured&&lastStatus.enabled&&lastStatus.mesh_ready&&!lastStatus.busy;[modeControl,thresholdControl,refreshControl].forEach(control=>control.disabled=!enabled)}}}
+modeControl.onchange=()=>{const p=new URLSearchParams;p.set('mode',modeControl.value);sendControl('/steinel/mode',p)};
+thresholdControl.oninput=()=>{thresholdValue.textContent=`${thresholdControl.value} lx`};
+thresholdControl.onchange=()=>{const p=new URLSearchParams;p.set('value',thresholdControl.value);sendControl('/steinel/threshold',p)};
+refreshControl.onclick=()=>sendControl('/steinel/refresh',new URLSearchParams);
+otaUpdate.onclick=()=>{const file=firmware.files[0];if(!file){otaStatus.textContent='Select an ESPHome .bin firmware file first.';return}if(!confirm('Install this firmware and restart the gateway?'))return;otaBusy=true;otaTransferred=false;otaUpdate.disabled=true;firmware.disabled=true;otaProgress.classList.remove('hidden');otaProgress.value=0;otaStatus.textContent='Uploading firmware…';const data=new FormData;data.append('update',file,file.name);const xhr=new XMLHttpRequest;xhr.open('POST','/update');xhr.upload.onprogress=e=>{if(e.lengthComputable){otaProgress.value=Math.round(e.loaded*100/e.total);otaTransferred=e.loaded===e.total;otaStatus.textContent=`Uploading firmware… ${otaProgress.value}%`}};xhr.onload=()=>{if(xhr.status>=200&&xhr.status<300&&(xhr.responseText.includes('Successful')||(otaTransferred&&!xhr.responseText.includes('Failed')))){otaRestart()}else{otaBusy=false;otaUpdate.disabled=false;firmware.disabled=false;otaStatus.textContent=xhr.responseText||`Update failed (HTTP ${xhr.status})`;poll()}};xhr.onerror=()=>{if(otaTransferred){otaRestart()}else{otaBusy=false;otaUpdate.disabled=false;firmware.disabled=false;otaStatus.textContent='Upload connection failed. The previous firmware remains active.';poll()}};xhr.send(data)};
+poll();setInterval(poll,10000);
+</script></body></html>

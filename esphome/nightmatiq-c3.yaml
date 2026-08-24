@@ -1,0 +1,275 @@
+substitutions:
+  name: "steinel-nightmatiq-gateway"
+  friendly_name: "Steinel NightmatIQ Plus"
+  device_description: "Standalone Steinel NightmatIQ Plus gateway for ESP32-C3"
+  project_name: "envpl.steinel_nightmatiq_gateway"
+  project_version: "1.0.0"
+
+esphome:
+  name: "${name}"
+  friendly_name: "${friendly_name}"
+  comment: "${device_description}"
+  name_add_mac_suffix: false
+  min_version: 2026.7.3
+  project:
+    name: "${project_name}"
+    version: "${project_version}"
+
+esp32:
+  variant: esp32c3
+  flash_size: 4MB
+  framework:
+    type: esp-idf
+    version: recommended
+    sdkconfig_options:
+      CONFIG_BT_ENABLED: y
+      CONFIG_BT_BLUEDROID_ENABLED: y
+      CONFIG_BT_NIMBLE_ENABLED: n
+      CONFIG_BT_BLE_42_FEATURES_SUPPORTED: y
+      CONFIG_BT_BLE_50_FEATURES_SUPPORTED: n
+      CONFIG_BT_BLE_50_EXTEND_ADV_EN: n
+      CONFIG_BT_BLE_50_EXTEND_SCAN_EN: n
+      CONFIG_BT_BLE_50_EXTEND_SYNC_EN: n
+      CONFIG_BT_BLE_50_PERIODIC_ADV_EN: n
+      CONFIG_BT_BLE_50_DTM_TEST_EN: n
+      CONFIG_BT_CTRL_BLE_MAX_ACT: "3"
+      CONFIG_BLE_MESH: y
+      CONFIG_BLE_MESH_PROVISIONER: y
+      CONFIG_BLE_MESH_SETTINGS: y
+      CONFIG_BLE_MESH_PB_ADV: y
+      CONFIG_BLE_MESH_SUPPORT_BLE_SCAN: y
+      CONFIG_BLE_MESH_ADV_BUF_COUNT: "6"
+      CONFIG_BLE_MESH_CRPL: "3"
+      CONFIG_BLE_MESH_MSG_CACHE_SIZE: "2"
+      CONFIG_BLE_MESH_WAIT_FOR_PROV_MAX_DEV_NUM: "1"
+      CONFIG_BLE_MESH_MAX_PROV_NODES: "1"
+      CONFIG_BLE_MESH_PBA_SAME_TIME: "1"
+      CONFIG_BLE_MESH_PROVISIONER_SUBNET_COUNT: "1"
+      CONFIG_BLE_MESH_PROVISIONER_APP_KEY_COUNT: "1"
+      CONFIG_BLE_MESH_SUBNET_COUNT: "1"
+      CONFIG_BLE_MESH_APP_KEY_COUNT: "1"
+      CONFIG_BLE_MESH_MODEL_KEY_COUNT: "1"
+      CONFIG_BLE_MESH_MODEL_GROUP_COUNT: "1"
+      CONFIG_BLE_MESH_LABEL_COUNT: "1"
+      CONFIG_BLE_MESH_CFG_CLI: y
+      CONFIG_BLE_MESH_GENERIC_ONOFF_CLI: y
+      CONFIG_BLE_MESH_SENSOR_CLI: y
+      CONFIG_BLE_MESH_SCENE_CLI: y
+      CONFIG_BLE_MESH_LIGHT_LC_CLI: y
+      CONFIG_BLE_MESH_HEALTH_SRV: n
+      CONFIG_BLE_MESH_PROXY: n
+      CONFIG_BLE_MESH_TX_SEG_MSG_COUNT: "1"
+      CONFIG_BLE_MESH_TX_SEG_MAX: "3"
+      CONFIG_BLE_MESH_RX_SEG_MSG_COUNT: "1"
+      CONFIG_BLE_MESH_RX_SDU_MAX: "128"
+      CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM: "6"
+      CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM: "16"
+      CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM: "16"
+      CONFIG_ESP_WIFI_MGMT_SBUF_NUM: "6"
+      CONFIG_ESP_WIFI_SOFTAP_SUPPORT: y
+      CONFIG_ESP_WIFI_ENABLE_WPA3_SAE: n
+      CONFIG_ESP_WIFI_ENABLE_WPA3_OWE_STA: n
+      CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_ENABLE: n
+      CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_DISABLE: y
+      CONFIG_ESP_ERR_TO_NAME_LOOKUP: n
+      CONFIG_MBEDTLS_CERTIFICATE_BUNDLE: y
+      CONFIG_MBEDTLS_DYNAMIC_BUFFER: y
+      CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA: y
+      CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT: y
+      CONFIG_MBEDTLS_SERVER_SSL_SESSION_TICKETS: n
+      CONFIG_MBEDTLS_PEM_WRITE_C: n
+      CONFIG_MBEDTLS_X509_CRL_PARSE_C: n
+      CONFIG_MBEDTLS_X509_CSR_PARSE_C: n
+      CONFIG_MBEDTLS_ECDSA_DETERMINISTIC: n
+      CONFIG_MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA: n
+      CONFIG_MBEDTLS_KEY_EXCHANGE_ECDH_ECDSA: n
+      CONFIG_MBEDTLS_KEY_EXCHANGE_ECDH_RSA: n
+      CONFIG_MBEDTLS_KEY_EXCHANGE_RSA: n
+      CONFIG_MBEDTLS_ECP_DP_BP256R1_ENABLED: n
+      CONFIG_MBEDTLS_ECP_DP_BP384R1_ENABLED: n
+      CONFIG_MBEDTLS_ECP_DP_BP512R1_ENABLED: n
+      CONFIG_MBEDTLS_ECP_DP_SECP192K1_ENABLED: n
+      CONFIG_MBEDTLS_ECP_DP_SECP192R1_ENABLED: n
+      CONFIG_MBEDTLS_ECP_DP_SECP224K1_ENABLED: n
+      CONFIG_MBEDTLS_ECP_DP_SECP224R1_ENABLED: n
+      CONFIG_MBEDTLS_ECP_DP_SECP256K1_ENABLED: n
+      CONFIG_MBEDTLS_ECP_DP_SECP384R1_ENABLED: n
+      CONFIG_MBEDTLS_ECP_DP_SECP521R1_ENABLED: n
+      CONFIG_ESP_TASK_WDT_TIMEOUT_S: "10"
+
+preferences:
+  flash_write_interval: 5s
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [nightmatiq_mesh]
+
+nightmatiq_mesh:
+  id: nightmatiq_gateway
+  extended_diagnostics: true
+  lux_sensor_id: nightmatiq_lux
+  rssi_sensor_id: nightmatiq_rssi
+  threshold_number_id: nightmatiq_threshold
+  mode_select_id: nightmatiq_mode
+  ready_binary_sensor_id: nightmatiq_mesh_ready
+  actual_output_binary_sensor_id: nightmatiq_actual_output
+  status_text_sensor_id: nightmatiq_status
+  firmware_version_text_sensor_id: nightmatiq_firmware_version
+  hardware_version_sensor_id: nightmatiq_hardware_version
+  manufacturer_text_sensor_id: nightmatiq_manufacturer
+  company_id_text_sensor_id: nightmatiq_company_id
+  product_id_text_sensor_id: nightmatiq_product_id
+  web_username: !secret web_server_username
+  web_password: !secret web_server_password
+  update_interval: 30s
+
+logger:
+  level: INFO
+  hardware_uart: USB_SERIAL_JTAG
+
+api:
+  reboot_timeout: 0s
+  max_connections: 2
+  listen_backlog: 1
+  max_send_queue: 4
+  batch_delay: 500ms
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: NONE
+  ap:
+    ssid: "NightmatIQ Fallback"
+    password: !secret fallback_ap_password
+    ap_timeout: 90s
+
+captive_portal:
+
+mdns:
+  disabled: false
+
+esp32_ble_tracker:
+  scan_parameters:
+    continuous: false
+    active: true
+    interval: 320ms
+    window: 30ms
+
+web_server:
+  port: 80
+  version: 3
+  auth:
+    type: digest
+    username: !secret web_server_username
+    password: !secret web_server_password
+
+binary_sensor:
+  - platform: template
+    id: nightmatiq_mesh_ready
+    name: "NightmatIQ Mesh Ready"
+    entity_category: diagnostic
+
+  - platform: template
+    id: nightmatiq_actual_output
+    name: "NightmatIQ Actual Light Output"
+    icon: mdi:lightbulb
+
+sensor:
+  - platform: template
+    id: nightmatiq_rssi
+    name: "NightmatIQ Signal Strength"
+    device_class: signal_strength
+    state_class: measurement
+    unit_of_measurement: dBm
+    accuracy_decimals: 0
+    update_interval: never
+    entity_category: diagnostic
+
+  - platform: template
+    id: nightmatiq_hardware_version
+    name: "NightmatIQ Hardware Revision"
+    accuracy_decimals: 0
+    update_interval: never
+    entity_category: diagnostic
+
+  - platform: template
+    id: nightmatiq_lux
+    name: "NightmatIQ Illuminance"
+    device_class: illuminance
+    state_class: measurement
+    unit_of_measurement: lx
+    accuracy_decimals: 2
+    update_interval: never
+
+button:
+  - platform: template
+    name: "NightmatIQ Refresh"
+    icon: mdi:refresh
+    entity_category: diagnostic
+    on_press:
+      - lambda: 'id(nightmatiq_gateway).request_refresh();'
+
+number:
+  - platform: template
+    id: nightmatiq_threshold
+    name: "NightmatIQ Twilight Threshold"
+    icon: mdi:brightness-6
+    unit_of_measurement: lx
+    min_value: 1
+    max_value: 1500
+    step: 1
+    mode: slider
+    set_action:
+      - lambda: 'id(nightmatiq_gateway).set_threshold(x);'
+
+select:
+  - platform: template
+    id: nightmatiq_mode
+    name: "NightmatIQ Mode"
+    icon: mdi:theme-light-dark
+    optimistic: true
+    restore_value: true
+    initial_option: "Auto"
+    options:
+      - "Auto"
+      - "Always On"
+      - "Always Off"
+    set_action:
+      - lambda: 'id(nightmatiq_gateway).set_mode(x);'
+
+text_sensor:
+  - platform: template
+    id: nightmatiq_status
+    name: "NightmatIQ Status"
+    icon: mdi:bluetooth-connect
+    entity_category: diagnostic
+
+  - platform: template
+    id: nightmatiq_firmware_version
+    name: "NightmatIQ Installed Firmware"
+    icon: mdi:chip
+    entity_category: diagnostic
+
+  - platform: template
+    id: nightmatiq_manufacturer
+    name: "NightmatIQ Manufacturer"
+    icon: mdi:factory
+    entity_category: diagnostic
+
+  - platform: template
+    id: nightmatiq_company_id
+    name: "NightmatIQ Company ID"
+    icon: mdi:identifier
+    entity_category: diagnostic
+
+  - platform: template
+    id: nightmatiq_product_id
+    name: "NightmatIQ Product ID"
+    icon: mdi:identifier
+    entity_category: diagnostic

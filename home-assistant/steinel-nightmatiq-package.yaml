@@ -1,0 +1,34 @@
+template:
+  - sensor:
+      - name: "Stan sensora"
+        default_entity_id: sensor.steinel_nightmatiq_stan_sensora
+        unique_id: steinel_nightmatiq_sensor_summary
+        icon: >-
+          {{ 'mdi:lightbulb' if
+             is_state('binary_sensor.steinel_nightmatiq_plus_nightmatiq_actual_light_output', 'on')
+             else 'mdi:lightbulb-outline' }}
+        availability: >-
+          {{ states('binary_sensor.steinel_nightmatiq_plus_nightmatiq_actual_light_output')
+             not in ['unknown', 'unavailable'] }}
+        state: >-
+          {{ 'włączony' if
+             is_state('binary_sensor.steinel_nightmatiq_plus_nightmatiq_actual_light_output', 'on')
+             else 'wyłączony' }}{{ ' · Auto' if
+             is_state('select.steinel_nightmatiq_plus_nightmatiq_mode', 'Auto')
+             else '' }}
+      - name: "Sensor state"
+        default_entity_id: sensor.steinel_nightmatiq_sensor_state
+        unique_id: steinel_nightmatiq_sensor_summary_en
+        icon: >-
+          {{ 'mdi:lightbulb' if
+             is_state('binary_sensor.steinel_nightmatiq_plus_nightmatiq_actual_light_output', 'on')
+             else 'mdi:lightbulb-outline' }}
+        availability: >-
+          {{ states('binary_sensor.steinel_nightmatiq_plus_nightmatiq_actual_light_output')
+             not in ['unknown', 'unavailable'] }}
+        state: >-
+          {{ 'on' if
+             is_state('binary_sensor.steinel_nightmatiq_plus_nightmatiq_actual_light_output', 'on')
+             else 'off' }}{{ ' · Auto' if
+             is_state('select.steinel_nightmatiq_plus_nightmatiq_mode', 'Auto')
+             else '' }}
