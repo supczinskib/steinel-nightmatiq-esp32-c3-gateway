@@ -269,6 +269,12 @@ If the configured Wi-Fi network is unavailable for 90 seconds, the gateway start
 
 The same Steinel NightmatIQ Plus functionality is also available as an optional integration in the [AR01V3 RF/IR, ESP-RC01 & Steinel NightmatIQ Plus Gateway](https://github.com/supczinskib/athom-ar01v3-esp-rc01-gateway). Choose that project when NightmatIQ should be added to an existing multifunction AR01V3 gateway; choose this repository for a small, dedicated ESP32-C3 installation.
 
+## License
+
+Copyright (C) 2026 Bartosz Supcziński.
+
+This project is licensed under the GNU General Public License version 3 only (`GPL-3.0-only`). See [LICENSE](LICENSE).
+
 ## Credits and support
 
 - Author and maintainer: **Bartosz Supcziński**, <bartek@env.pl>.

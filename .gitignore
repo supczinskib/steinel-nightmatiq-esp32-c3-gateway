@@ -16,6 +16,7 @@ secrets.yaml
 **/.pio/
 build/
 **/build/
+output/
 .cache/
 **/.cache/
 

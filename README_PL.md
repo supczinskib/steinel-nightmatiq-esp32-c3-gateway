@@ -269,6 +269,12 @@ Jeżeli skonfigurowana sieć Wi-Fi jest niedostępna przez 90 sekund, bramka uru
 
 Ta sama funkcjonalność Steinel NightmatIQ Plus jest również dostępna jako opcjonalna integracja w projekcie [AR01V3 RF/IR, ESP-RC01 & Steinel NightmatIQ Plus Gateway](https://github.com/supczinskib/athom-ar01v3-esp-rc01-gateway). Wybierz tamten projekt, jeśli NightmatIQ ma być dodatkiem do istniejącej wielofunkcyjnej bramki AR01V3; to repozytorium jest przeznaczone dla małej, dedykowanej instalacji ESP32-C3.
 
+## Licencja
+
+Copyright (C) 2026 Bartosz Supcziński.
+
+Projekt jest udostępniany wyłącznie na warunkach GNU General Public License w wersji 3 (`GPL-3.0-only`). Pełna treść znajduje się w pliku [LICENSE](LICENSE).
+
 ## Autor i wsparcie
 
 - Autor i opiekun projektu: **Bartosz Supcziński**, <bartek@env.pl>.
