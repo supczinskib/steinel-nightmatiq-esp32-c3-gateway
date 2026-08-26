@@ -1,6 +1,6 @@
 # Steinel NightmatIQ Plus Gateway for ESP32-C3
 
-[Polska wersja README](README_PL.md)
+[Polski](README_PL.md) · [Deutsch](README_DE.md)
 
 > **Standalone ESP32-C3 Bluetooth Mesh gateway for local Steinel NightmatIQ Plus control, diagnostics, firmware updates, and Home Assistant integration.**
 
@@ -9,8 +9,6 @@ Steinel NightmatIQ Plus <-> Bluetooth Mesh <-> ESP32-C3 gateway -> Home Assistan
 ```
 
 Community ESPHome firmware that turns an ESP32-C3 Super Mini into a dedicated local Steinel NightmatIQ Plus gateway. It imports the existing Steinel network configuration, communicates directly over Bluetooth Mesh, provides a password-protected browser interface, and exposes control, sensor, identity, and diagnostic entities to Home Assistant.
-
-Version 1.0.0 provides automatic Bluetooth Mesh source-address selection and recovery, persistent confirmation of a working address, bilingual local control, USB and OTA installation, browser-based firmware updates, and an optional compact Home Assistant control dialog.
 
 Author and maintainer: **Bartosz Supcziński** — <bartek@env.pl>
 
@@ -68,7 +66,7 @@ An optional frontend module combines sensor state, illuminance, operating mode a
 - Installed configuration and extended diagnostics.
 - Mesh RSSI and response counters.
 - Password-protected browser OTA update.
-- Polish and English interface selected from the browser language.
+- Gateway administration panel with firmware updates, administrator password management and a complete factory reset.
 
 ### Home Assistant integration
 
@@ -103,7 +101,9 @@ The firmware is designed for the ESP32-C3 and ESP-IDF. Bluetooth 5 extended feat
 
 ## Security
 
-- Wi-Fi, OTA, fallback AP and web-interface passwords are stored only in `esphome/secrets.yaml`, which is excluded from Git.
+- The factory administrator account is `admin` with password `12345678`; change it on the device page immediately after joining Wi-Fi.
+- The administrator password protects both the local page and firmware updates and is stored in ESP32 NVS.
+- The provisioning access point uses the factory password `12345678`.
 - Steinel credentials entered on the setup page are used for the required HTTPS requests and are never saved by the gateway.
 - The local web interface uses HTTP Digest authentication. It authenticates access but does not encrypt local HTTP traffic.
 - The default ESPHome native API configuration does not use an encryption key.
@@ -116,10 +116,22 @@ The firmware is designed for the ESP32-C3 and ESP-IDF. Bluetooth 5 extended feat
 |---|---|
 | `esphome/nightmatiq-c3.yaml` | Main ESPHome firmware configuration |
 | `esphome/components/nightmatiq_mesh/` | Bluetooth Mesh, Steinel Cloud and local web component |
-| `esphome/secrets.example.yaml` | Public secrets template |
 | `scripts/` | Installation, validation, USB and OTA helpers |
 | `home-assistant/` | Optional Home Assistant package and compact control dialog |
 | `docs/images/` | Public README images |
+
+## Ready-made installation
+
+The recommended first installation does not require compiling ESPHome:
+
+1. Download the latest `steinel-nightmatiq-esp32-c3-gateway-vX.Y.Z-factory.bin` from [GitHub Releases](https://github.com/supczinskib/steinel-nightmatiq-esp32-c3-gateway/releases/latest).
+2. Open [ESPHome Web](https://web.esphome.io/) in a WebSerial-capable browser and connect the ESP32-C3 by USB.
+3. Select the board, choose **Install**, and select the downloaded `-factory.bin` file.
+4. After installation, continue with **Connect Wi-Fi** and **Connect NightmatIQ** below.
+
+The file is processed locally by ESPHome Web. The `-factory.bin` image is for a new board or USB recovery; later browser updates use the `-ota.bin` image.
+
+## Building from source
 
 ## Requirements
 
@@ -129,7 +141,7 @@ The firmware is designed for the ESP32-C3 and ESP-IDF. Bluetooth 5 extended feat
 - network access to the ESP32-C3 and Steinel Cloud during initial setup;
 - Home Assistant is optional.
 
-The supplied installer creates an isolated, reproducible ESPHome environment with all project requirements.
+The supplied installer creates an isolated, reproducible environment using unmodified ESPHome `2026.7.3`. No patch is applied to the installed ESPHome package.
 
 ## 1. Download and prepare the project
 
@@ -139,36 +151,15 @@ Clone or download this repository, enter its directory and install the pinned to
 sudo bash scripts/01_install_esphome.sh
 ```
 
-## 2. Configure secrets
-
-Run the interactive configuration helper:
-
-```bash
-bash scripts/02_configure_secrets.sh
-```
-
-It creates `esphome/secrets.yaml` with:
-
-- Wi-Fi SSID and password;
-- OTA password;
-- fallback AP password;
-- local web-interface username and password.
-
-You may instead copy and edit the example manually:
-
-```bash
-cp esphome/secrets.example.yaml esphome/secrets.yaml
-```
-
-## 3. Validate and build
+## 2. Validate
 
 ```bash
 bash scripts/03_validate_all.sh
 ```
 
-This runs repository checks, validates the ESPHome configuration and builds the firmware.
+This runs repository checks and validates the ESPHome configuration.
 
-## 4. First installation or USB recovery
+## 3. First installation or USB recovery
 
 Connect the ESP32-C3 and use its stable `/dev/serial/by-id/` path when available:
 
@@ -182,28 +173,42 @@ If the board has no `by-id` link, use the detected ACM port:
 sudo bash scripts/09_upload_usb.sh /dev/ttyACM0
 ```
 
-The first USB installation also prepares the device for subsequent OTA updates, so the boot button is normally not required again.
+The same compiled image can be installed on every supported ESP32-C3 board. The first USB installation also prepares the device for subsequent browser updates, so the boot button is normally not required again.
+
+## 4. Connect Wi-Fi
+
+1. Connect to the access point named `nightmatiq-gateway-XXXXXX` using password `12345678`.
+2. Select the target 2.4 GHz Wi-Fi network in the captive portal and enter its password.
+3. Wait for the gateway to restart and connect to the selected network.
+4. Open the address assigned by the router or the device hostname ending in `.local`.
+
+The Wi-Fi configuration is stored by the device and survives firmware updates.
 
 ## 5. Connect NightmatIQ
 
 1. Open the gateway address in a browser.
-2. Sign in with the local web-interface credentials from `secrets.yaml`.
-3. Enter the Steinel Cloud account credentials.
-4. Download the network list.
-5. Select the network containing the NightmatIQ device.
-6. Install the configuration and allow the gateway to restart.
+2. Sign in as `admin` with factory password `12345678`.
+3. In **Gateway administration**, change the password in the visible **Administrator access** section. The same new password will authorize future firmware updates.
+4. Sign in again after the automatic restart.
+5. Enter the Steinel Cloud account credentials and download the network list.
+6. Select the network containing the NightmatIQ device.
+7. Install the configuration and allow the gateway to restart.
 
 The NightmatIQ node address and IV Index can normally be selected automatically from the backup. Credentials remain only in the browser form for the setup requests.
 
 ## 6. Updating over Wi-Fi
 
-From the command line:
+The gateway checks the latest stable GitHub release when its page opens; **CHECK FOR UPDATES** repeats the check manually. If a newer version is available, **DOWNLOAD AND INSTALL** downloads it over HTTPS, verifies its size and SHA-256 digest, installs it and restarts the gateway. A failed update leaves the current firmware active.
+
+Manual installation remains available under **Manual firmware file**. Use only the release file ending in `-ota.bin`; `-factory.bin` is intended exclusively for the first USB installation. No separate OTA password is used or shown to the user.
+
+**Factory reset** removes Wi-Fi, administrator and NightmatIQ Mesh settings, then restores the factory account and configuration access point without changing the installed firmware version.
+
+From the command line, enter the administrator password when requested:
 
 ```bash
 bash scripts/05_upload_ota.sh DEVICE_IP_OR_HOSTNAME
 ```
-
-Alternatively, open the gateway page, choose an ESPHome firmware `.bin` file in **Firmware update** and install it. The gateway verifies the image and restarts automatically.
 
 ## 7. Home Assistant integration
 
@@ -233,11 +238,11 @@ The module customizes the generated area tile and Home Assistant's more-info dia
 
 During network import, each gateway derives a Mesh address policy from the selected installation and its own hardware identity. The same firmware can therefore be configured for different ESP32-C3 boards and NightmatIQ installations.
 
-Before installing the configuration on more than one ESP32-C3, give every gateway a unique ESPHome name or enable `name_add_mac_suffix`. Wi-Fi settings may be shared; unique OTA and web passwords are recommended.
+The MAC suffix in the device name is enabled by default, so multiple gateways receive unique hostnames and access-point names. Configure a unique administrator password on each gateway.
 
 ## Fallback access point
 
-If the configured Wi-Fi network is unavailable for 90 seconds, the gateway starts the password-protected **NightmatIQ Fallback** access point. Connect to it using `fallback_ap_password` from `secrets.yaml` and update the Wi-Fi configuration through the captive portal.
+If the configured Wi-Fi network is unavailable for 90 seconds, the gateway starts its password-protected access point again. Connect using factory access-point password `12345678` and update the Wi-Fi configuration through the captive portal. The local page remains protected by the administrator password selected on the device.
 
 ## Troubleshooting
 
@@ -261,7 +266,7 @@ If the configured Wi-Fi network is unavailable for 90 seconds, the gateway start
 
 ### OTA update fails
 
-- Confirm the target address and OTA password.
+- Confirm the target address and gateway administrator password.
 - Use the browser updater from a trusted LAN.
 - Recover through native USB if the device no longer reaches Wi-Fi.
 

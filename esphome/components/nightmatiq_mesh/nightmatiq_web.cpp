@@ -25,9 +25,13 @@
 #include "esphome/core/hal.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
+#include "esphome/core/version.h"
+#include "esphome/components/api/api_server.h"
+#include "esphome/components/network/util.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
+#include "mbedtls/sha256.h"
 
 namespace esphome::nightmatiq_mesh {
 
@@ -36,6 +40,18 @@ static const char *const API_BASE = "https://connectapp.steinel.de/api";
 static constexpr uint32_t CLOUD_TASK_STACK_BYTES = 8192;
 static constexpr uint32_t CLOUD_ERROR_REBOOT_DELAY_MS = 20000;
 static constexpr uint32_t CLOUD_DISCOVER_SESSION_TIMEOUT_MS = 300000;
+static constexpr uint32_t CLOUD_API_SHUTDOWN_TIMEOUT_MS = 5000;
+static constexpr uint32_t AUTO_UPDATE_TASK_STACK_BYTES = 10240;
+static const char *const RELEASE_ASSET_REDIRECT_PREFIX =
+    "https://release-assets.githubusercontent.com/";
+static constexpr size_t AUTO_UPDATE_MAX_REDIRECT_URL_LENGTH = 4096;
+static constexpr size_t AUTO_UPDATE_REQUEST_OVERHEAD_BYTES = 256;
+static constexpr uint32_t AUTO_UPDATE_STAGE_TIMEOUT_MS = 7500;
+static constexpr uint32_t AUTO_UPDATE_ERROR_REBOOT_DELAY_MS = 20000;
+static const char *const RELEASE_DOWNLOAD_PREFIX =
+    "https://github.com/supczinskib/steinel-nightmatiq-esp32-c3-gateway/releases/download/v";
+static const char *const RELEASE_ASSET_PREFIX =
+    "steinel-nightmatiq-esp32-c3-gateway-v";
 
 #ifdef USE_NIGHTMATIQ_EXTENDED_DIAGNOSTICS
 static const char *reset_reason_name(esp_reset_reason_t reason) {
@@ -128,6 +144,16 @@ class StatusJsonWriter {
   char buffer_[256]{};
   size_t length_{0};
   bool ok_{true};
+};
+
+struct NightmatiqMesh::AutoUpdateContext {
+  NightmatiqMesh *owner;
+  esp_ota_handle_t ota_handle{0};
+  size_t received{0};
+  esp_err_t sink_error{ESP_OK};
+  mbedtls_sha256_context sha256{};
+  std::string redirect_url;
+  bool accept_firmware_data{false};
 };
 
 struct NightmatiqMesh::CloudTaskArgs {
@@ -1040,6 +1066,333 @@ bool NightmatiqMesh::authenticate_(AsyncWebServerRequest *request) const {
   return false;
 }
 
+bool NightmatiqMesh::parse_version_(const std::string &value,
+                                    std::array<uint16_t, 3> &version) {
+  if (value.empty() || value.size() > AUTO_UPDATE_VERSION_MAX_LENGTH)
+    return false;
+  unsigned major = 0;
+  unsigned minor = 0;
+  unsigned patch = 0;
+  char trailing = '\0';
+  if (std::sscanf(value.c_str(), "%u.%u.%u%c", &major, &minor, &patch, &trailing) != 3 ||
+      major > UINT16_MAX || minor > UINT16_MAX || patch > UINT16_MAX)
+    return false;
+  version = {static_cast<uint16_t>(major), static_cast<uint16_t>(minor),
+             static_cast<uint16_t>(patch)};
+  return true;
+}
+
+bool NightmatiqMesh::parse_sha256_(const std::string &value,
+                                   std::array<uint8_t, 32> &digest) {
+  if (value.size() != digest.size() * 2)
+    return false;
+  for (size_t index = 0; index < digest.size(); index++) {
+    const unsigned char high = static_cast<unsigned char>(value[index * 2]);
+    const unsigned char low = static_cast<unsigned char>(value[index * 2 + 1]);
+    if (!std::isxdigit(high) || !std::isxdigit(low))
+      return false;
+    const char pair[3]{value[index * 2], value[index * 2 + 1], '\0'};
+    char *end = nullptr;
+    const unsigned long parsed = std::strtoul(pair, &end, 16);
+    if (end == nullptr || *end != '\0')
+      return false;
+    digest[index] = static_cast<uint8_t>(parsed);
+  }
+  return true;
+}
+
+bool NightmatiqMesh::load_auto_update_() {
+  StoredAutoUpdate stored{};
+  if (!this->auto_update_preference_.load(&stored) || stored.magic != AUTO_UPDATE_MAGIC ||
+      stored.version != AUTO_UPDATE_VERSION || stored.image_size == 0 ||
+      stored.target_version[AUTO_UPDATE_VERSION_MAX_LENGTH] != '\0' ||
+      stored.url[AUTO_UPDATE_URL_MAX_LENGTH] != '\0')
+    return false;
+
+  std::array<uint16_t, 3> parsed{};
+  const std::string version(stored.target_version);
+  const std::string expected_url = std::string(RELEASE_DOWNLOAD_PREFIX) + version + "/" +
+                                   RELEASE_ASSET_PREFIX + version + "-ota.bin";
+  const esp_partition_t *partition = esp_ota_get_next_update_partition(nullptr);
+  if (!parse_version_(version, parsed) || expected_url != stored.url || partition == nullptr ||
+      stored.image_size > partition->size ||
+      std::all_of(stored.sha256.begin(), stored.sha256.end(),
+                  [](uint8_t value) { return value == 0; })) {
+    StoredAutoUpdate empty{};
+    empty.magic = 0;
+    this->auto_update_preference_.save(&empty);
+    global_preferences->sync();
+    return false;
+  }
+
+  this->auto_update_ = stored;
+  this->auto_update_mode_ = true;
+  this->auto_update_progress_.store(0);
+  return true;
+}
+
+bool NightmatiqMesh::save_auto_update_(const StoredAutoUpdate &update) {
+  if (!this->auto_update_preference_.save(&update) || !global_preferences->sync())
+    return false;
+  this->auto_update_ = update;
+  return true;
+}
+
+bool NightmatiqMesh::clear_auto_update_() {
+  StoredAutoUpdate empty{};
+  empty.magic = 0;
+  if (!this->auto_update_preference_.save(&empty) || !global_preferences->sync())
+    return false;
+  this->auto_update_ = StoredAutoUpdate{};
+  return true;
+}
+
+void NightmatiqMesh::fail_auto_update_(const std::string &error) {
+  if (!this->clear_auto_update_())
+    ESP_LOGE(WEB_TAG, "Could not clear failed automatic update request");
+  this->auto_update_running_.store(false);
+  this->set_status_("Firmware update failed: " + error + "; restarting current firmware", false);
+  this->reboot_at_ = millis() + AUTO_UPDATE_ERROR_REBOOT_DELAY_MS;
+  this->reboot_pending_.store(true);
+  ESP_LOGE(WEB_TAG, "Automatic firmware update failed: %s", error.c_str());
+}
+
+void NightmatiqMesh::advance_auto_update_() {
+  if (this->auto_update_running_.load() || this->reboot_pending_.load())
+    return;
+  if (!network::is_connected()) {
+    this->set_status_("Firmware update pending; waiting for network", false);
+    return;
+  }
+
+  if (!this->auto_update_api_shutdown_started_) {
+    this->auto_update_api_shutdown_started_ = true;
+    this->auto_update_stage_deadline_ = millis() + AUTO_UPDATE_STAGE_TIMEOUT_MS;
+    if (api::global_api_server != nullptr)
+      api::global_api_server->on_shutdown();
+    this->set_status_("Preparing automatic firmware update", false);
+    return;
+  }
+
+  const bool api_released =
+      api::global_api_server == nullptr || api::global_api_server->teardown();
+  if (!api_released) {
+    if (static_cast<int32_t>(millis() - this->auto_update_stage_deadline_) < 0)
+      return;
+    this->fail_auto_update_("could not close Home Assistant connection");
+    return;
+  }
+
+  if (!this->auto_update_ble_disable_started_) {
+    this->auto_update_ble_disable_started_ = true;
+    this->auto_update_stage_deadline_ = millis() + AUTO_UPDATE_STAGE_TIMEOUT_MS;
+    if (esp32_ble::global_ble != nullptr)
+      esp32_ble::global_ble->disable();
+    return;
+  }
+
+  const bool bluetooth_released =
+      esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_IDLE &&
+      esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_UNINITIALIZED;
+  if (!bluetooth_released) {
+    if (static_cast<int32_t>(millis() - this->auto_update_stage_deadline_) < 0)
+      return;
+    this->fail_auto_update_("could not release Bluetooth memory");
+    return;
+  }
+
+  this->auto_update_running_.store(true);
+  this->set_status_("Downloading firmware update", false);
+  if (xTaskCreate(auto_update_task_, "nightmatiq_ota", AUTO_UPDATE_TASK_STACK_BYTES,
+                  this, 2, nullptr) != pdPASS) {
+    this->auto_update_running_.store(false);
+    this->fail_auto_update_("could not start download task");
+  }
+}
+
+esp_err_t NightmatiqMesh::auto_update_http_event_(esp_http_client_event_t *event) {
+  auto *context = static_cast<AutoUpdateContext *>(event->user_data);
+  if (context == nullptr)
+    return ESP_OK;
+  if (event->event_id == HTTP_EVENT_ON_HEADER && event->header_key != nullptr &&
+      event->header_value != nullptr && strcasecmp(event->header_key, "Location") == 0) {
+    context->redirect_url = event->header_value;
+    return ESP_OK;
+  }
+  if (!context->accept_firmware_data || event->event_id != HTTP_EVENT_ON_DATA ||
+      event->data_len <= 0 || context->sink_error != ESP_OK)
+    return ESP_OK;
+
+  const size_t length = static_cast<size_t>(event->data_len);
+  if (context->received + length > context->owner->auto_update_.image_size) {
+    context->sink_error = ESP_ERR_INVALID_SIZE;
+    return context->sink_error;
+  }
+  context->sink_error = esp_ota_write(context->ota_handle, event->data, length);
+  if (context->sink_error != ESP_OK)
+    return context->sink_error;
+  if (mbedtls_sha256_update(&context->sha256,
+                            static_cast<const unsigned char *>(event->data), length) != 0) {
+    context->sink_error = ESP_FAIL;
+    return context->sink_error;
+  }
+  context->received += length;
+  context->owner->auto_update_progress_.store(static_cast<uint8_t>(
+      std::min<size_t>(99, context->received * 100 / context->owner->auto_update_.image_size)));
+  return ESP_OK;
+}
+
+void NightmatiqMesh::auto_update_task_(void *parameter) {
+  auto *self = static_cast<NightmatiqMesh *>(parameter);
+  const esp_partition_t *partition = esp_ota_get_next_update_partition(nullptr);
+  if (partition == nullptr || self->auto_update_.image_size > partition->size) {
+    self->fail_auto_update_("no safe OTA partition is available");
+    vTaskDelete(nullptr);
+    return;
+  }
+
+  AutoUpdateContext context{};
+  context.owner = self;
+  mbedtls_sha256_init(&context.sha256);
+  if (mbedtls_sha256_starts(&context.sha256, 0) != 0 ||
+      esp_ota_begin(partition, self->auto_update_.image_size, &context.ota_handle) != ESP_OK) {
+    mbedtls_sha256_free(&context.sha256);
+    self->fail_auto_update_("could not prepare inactive firmware partition");
+    vTaskDelete(nullptr);
+    return;
+  }
+
+  esp_http_client_config_t config{};
+  config.url = self->auto_update_.url;
+  config.method = HTTP_METHOD_GET;
+  config.timeout_ms = 120000;
+  config.buffer_size = 2048;
+  config.buffer_size_tx = 512;
+  config.event_handler = auto_update_http_event_;
+  config.user_data = &context;
+  config.crt_bundle_attach = esp_crt_bundle_attach;
+  config.keep_alive_enable = false;
+  config.disable_auto_redirect = true;
+  esp_http_client_handle_t client = esp_http_client_init(&config);
+  if (client != nullptr) {
+    esp_http_client_set_header(client, "Accept", "application/octet-stream");
+    esp_http_client_set_header(client, "Connection", "close");
+  }
+  const esp_err_t redirect_result =
+      client == nullptr ? ESP_ERR_NO_MEM : esp_http_client_perform(client);
+  const int redirect_status = client == nullptr ? 0 : esp_http_client_get_status_code(client);
+  if (client != nullptr)
+    esp_http_client_cleanup(client);
+
+  const bool redirect_status_valid = redirect_status == 301 || redirect_status == 302 ||
+                                     redirect_status == 303 || redirect_status == 307 ||
+                                     redirect_status == 308;
+  const bool redirect_url_valid =
+      context.redirect_url.size() <= AUTO_UPDATE_MAX_REDIRECT_URL_LENGTH &&
+      context.redirect_url.compare(0, std::strlen(RELEASE_ASSET_REDIRECT_PREFIX),
+                                   RELEASE_ASSET_REDIRECT_PREFIX) == 0;
+  if (redirect_result != ESP_OK || !redirect_status_valid || !redirect_url_valid) {
+    esp_ota_abort(context.ota_handle);
+    mbedtls_sha256_free(&context.sha256);
+    self->fail_auto_update_("invalid GitHub release redirect: result " +
+                            std::to_string(static_cast<int32_t>(redirect_result)) +
+                            ", HTTP " + std::to_string(redirect_status));
+    vTaskDelete(nullptr);
+    return;
+  }
+
+  context.accept_firmware_data = true;
+  config.url = context.redirect_url.c_str();
+  config.buffer_size_tx = static_cast<int>(std::max<size_t>(
+      512, context.redirect_url.size() + AUTO_UPDATE_REQUEST_OVERHEAD_BYTES));
+  client = esp_http_client_init(&config);
+  if (client != nullptr) {
+    esp_http_client_set_header(client, "Accept", "application/octet-stream");
+    esp_http_client_set_header(client, "Connection", "close");
+  }
+  esp_err_t result = client == nullptr ? ESP_ERR_NO_MEM : esp_http_client_perform(client);
+  const int http_status = client == nullptr ? 0 : esp_http_client_get_status_code(client);
+  int tls_code = 0;
+  int tls_flags = 0;
+  const int socket_errno = client == nullptr ? 0 : esp_http_client_get_errno(client);
+  const esp_err_t tls_error =
+      client == nullptr
+          ? ESP_ERR_NO_MEM
+          : esp_http_client_get_and_clear_last_tls_error(client, &tls_code, &tls_flags);
+  if (client != nullptr)
+    esp_http_client_cleanup(client);
+
+  std::array<uint8_t, 32> digest{};
+  const int digest_result = mbedtls_sha256_finish(&context.sha256, digest.data());
+  mbedtls_sha256_free(&context.sha256);
+  if (result != ESP_OK || http_status != 200 || context.sink_error != ESP_OK ||
+      context.received != self->auto_update_.image_size || digest_result != 0 ||
+      digest != self->auto_update_.sha256) {
+    esp_ota_abort(context.ota_handle);
+    ESP_LOGE(WEB_TAG,
+             "Firmware download failed: result=%s, HTTP=%d, received=%u/%u, sink=%s, "
+             "SHA result=%d, TLS error=%d, TLS code=%d, TLS flags=0x%X, errno=%d",
+             esp_err_to_name(result), http_status, static_cast<unsigned>(context.received),
+             static_cast<unsigned>(self->auto_update_.image_size),
+             esp_err_to_name(context.sink_error), digest_result, static_cast<int>(tls_error),
+             tls_code, tls_flags, socket_errno);
+    if (context.sink_error != ESP_OK)
+      self->fail_auto_update_(std::string("flash write failed: ") +
+                              esp_err_to_name(context.sink_error));
+    else if (result != ESP_OK)
+      self->fail_auto_update_(std::string("HTTPS download failed: ") + esp_err_to_name(result) +
+                              " (" + std::to_string(static_cast<int32_t>(result)) +
+                              "), HTTP " + std::to_string(http_status) + ", received " +
+                              std::to_string(context.received) + " of " +
+                              std::to_string(self->auto_update_.image_size) + " bytes, TLS " +
+                              std::to_string(static_cast<int32_t>(tls_error)) + "/" +
+                              std::to_string(tls_code) + ", flags " +
+                              std::to_string(tls_flags) + ", errno " +
+                              std::to_string(socket_errno));
+    else if (http_status != 200)
+      self->fail_auto_update_("firmware server returned HTTP " + std::to_string(http_status));
+    else if (context.received != self->auto_update_.image_size)
+      self->fail_auto_update_("download was incomplete: " +
+                              std::to_string(context.received) + " of " +
+                              std::to_string(self->auto_update_.image_size) + " bytes");
+    else if (digest_result != 0)
+      self->fail_auto_update_("could not calculate firmware SHA-256");
+    else if (digest != self->auto_update_.sha256)
+      self->fail_auto_update_("SHA-256 verification failed");
+    else
+      self->fail_auto_update_("firmware download failed");
+    vTaskDelete(nullptr);
+    return;
+  }
+
+  result = esp_ota_end(context.ota_handle);
+  if (result != ESP_OK) {
+    self->fail_auto_update_(std::string("firmware image validation failed: ") +
+                            esp_err_to_name(result));
+    vTaskDelete(nullptr);
+    return;
+  }
+  if (!self->clear_auto_update_()) {
+    self->fail_auto_update_("could not clear the saved update request");
+    vTaskDelete(nullptr);
+    return;
+  }
+  result = esp_ota_set_boot_partition(partition);
+  if (result != ESP_OK) {
+    self->fail_auto_update_(std::string("could not activate new firmware: ") +
+                            esp_err_to_name(result));
+    vTaskDelete(nullptr);
+    return;
+  }
+
+  self->auto_update_progress_.store(100);
+  self->auto_update_running_.store(false);
+  self->set_status_("Firmware update verified; restarting gateway", false);
+  self->reboot_at_ = millis() + 1500;
+  self->reboot_pending_.store(true);
+  vTaskDelete(nullptr);
+}
+
 bool NightmatiqMesh::canHandle(AsyncWebServerRequest *request) const {
   char url_buffer[AsyncWebServerRequest::URL_BUF_SIZE];
   const StringRef url = request->url_to(url_buffer);
@@ -1049,7 +1402,8 @@ bool NightmatiqMesh::canHandle(AsyncWebServerRequest *request) const {
          (url == "/steinel/discover" || url == "/steinel/install" || url == "/steinel/enable" ||
           url == "/steinel/disable" || url == "/steinel/remove" ||
           url == "/steinel/mode" || url == "/steinel/threshold" ||
-          url == "/steinel/refresh");
+          url == "/steinel/refresh" || url == "/steinel/password" ||
+          url == "/steinel/update" || url == "/steinel/factory-reset");
 }
 
 void NightmatiqMesh::handleRequest(AsyncWebServerRequest *request) {
@@ -1066,6 +1420,9 @@ void NightmatiqMesh::handleRequest(AsyncWebServerRequest *request) {
   if (url == "/steinel/mode") return this->handle_mode_(request);
   if (url == "/steinel/threshold") return this->handle_threshold_(request);
   if (url == "/steinel/refresh") return this->handle_refresh_(request);
+  if (url == "/steinel/password") return this->handle_password_(request);
+  if (url == "/steinel/update") return this->handle_auto_update_(request);
+  if (url == "/steinel/factory-reset") return this->handle_factory_reset_(request);
   send_json_(request, 404, "{\"message\":\"Not found\"}");
 }
 
@@ -1091,16 +1448,34 @@ void NightmatiqMesh::handle_status_(AsyncWebServerRequest *request) {
   body.append(",\"enabled\":");
   body.append(this->mesh_mode_enabled_ ? "true" : "false");
   body.append(",\"busy\":");
-  body.append(this->cloud_busy_.load() ? "true" : "false");
+  body.append(this->cloud_busy_.load() || this->auto_update_running_.load() ? "true" : "false");
   body.append(",\"mesh_ready\":");
   body.append(this->mesh_ready_.load() ? "true" : "false");
   body.append(",\"composition_received\":");
   body.append(this->composition_received_.load() ? "true" : "false");
   body.append(",\"runtime_mode\":\"");
-  body.append(this->mesh_mode_enabled_ ? "Bluetooth Mesh" : "Setup");
+  body.append(this->auto_update_mode_ ? "Firmware Update" :
+              this->mesh_mode_enabled_ ? "Bluetooth Mesh" : "Setup");
   body.append("\",\"message\":\"");
   body.escaped(this->status_.c_str());
   body.append("\"");
+  body.append(",\"factory_password\":");
+  body.append(this->using_factory_admin_password_ ? "true" : "false");
+  body.append(",\"gateway_version\":\"");
+  body.append(ESPHOME_PROJECT_VERSION);
+  const esp_partition_t *running_partition = esp_ota_get_running_partition();
+  esp_ota_img_states_t running_image_state = ESP_OTA_IMG_UNDEFINED;
+  const bool firmware_pending_validation =
+      running_partition != nullptr &&
+      esp_ota_get_state_partition(running_partition, &running_image_state) == ESP_OK &&
+      running_image_state == ESP_OTA_IMG_PENDING_VERIFY;
+  body.append("\",\"firmware_pending_validation\":");
+  body.append(firmware_pending_validation ? "true" : "false");
+  body.append(",\"auto_update_mode\":");
+  body.append(this->auto_update_mode_ ? "true" : "false");
+  body.append(",\"auto_update_running\":");
+  body.append(this->auto_update_running_.load() ? "true" : "false");
+  body.number(",\"auto_update_progress\":", this->auto_update_progress_.load());
 #ifdef USE_NIGHTMATIQ_EXTENDED_DIAGNOSTICS
   body.append(",\"extended_diagnostics\":true");
   body.number(",\"free_internal_heap\":",
@@ -1330,6 +1705,20 @@ void NightmatiqMesh::handle_remove_(AsyncWebServerRequest *request) {
   send_json_(request, 200, "{\"message\":\"NightmatIQ configuration removed\"}");
 }
 
+void NightmatiqMesh::handle_factory_reset_(AsyncWebServerRequest *request) {
+  if (this->factory_reset_pending_.load())
+    return send_json_(request, 200, "{\"message\":\"Factory reset is already scheduled\"}");
+  if (this->cloud_busy_.load() || this->auto_update_running_.load() ||
+      this->auto_update_mode_ || this->reboot_pending_.load())
+    return send_json_(request, 409, "{\"message\":\"Gateway is busy\"}");
+
+  this->set_status_("Factory reset scheduled; all gateway settings will be erased");
+  this->factory_reset_at_ = millis() + 1000;
+  this->factory_reset_pending_.store(true);
+  send_json_(request, 200,
+             "{\"message\":\"Factory reset scheduled; reconnect to the gateway access point\"}");
+}
+
 void NightmatiqMesh::handle_mode_(AsyncWebServerRequest *request) {
   if (!this->configured_ || !this->mesh_mode_enabled_ || !this->mesh_ready_.load())
     return send_json_(request, 409, "{\"message\":\"Bluetooth Mesh is not ready\"}");
@@ -1363,6 +1752,86 @@ void NightmatiqMesh::handle_refresh_(AsyncWebServerRequest *request) {
     return send_json_(request, 409, "{\"message\":\"Gateway is busy\"}");
   this->web_refresh_pending_.store(true);
   send_json_(request, 200, "{\"message\":\"Refreshing NightmatIQ state\"}");
+}
+
+void NightmatiqMesh::handle_password_(AsyncWebServerRequest *request) {
+  if (this->cloud_busy_.load() || this->reboot_pending_.load())
+    return send_json_(request, 409, "{\"message\":\"Gateway is busy\"}");
+
+  std::string password = request->arg("password").c_str();
+  std::string confirmation = request->arg("confirmation").c_str();
+  if (password != confirmation) {
+    std::fill(password.begin(), password.end(), '\0');
+    std::fill(confirmation.begin(), confirmation.end(), '\0');
+    return send_json_(request, 400, "{\"message\":\"The passwords do not match\"}");
+  }
+  if (!valid_admin_password_(password)) {
+    std::fill(password.begin(), password.end(), '\0');
+    std::fill(confirmation.begin(), confirmation.end(), '\0');
+    return send_json_(request, 400,
+                      "{\"message\":\"Use 8-63 printable characters without spaces\"}");
+  }
+  if (password == this->web_password_) {
+    std::fill(password.begin(), password.end(), '\0');
+    std::fill(confirmation.begin(), confirmation.end(), '\0');
+    return send_json_(request, 400,
+                      "{\"message\":\"Choose a password different from the current password\"}");
+  }
+  if (!this->save_admin_password_(password)) {
+    std::fill(password.begin(), password.end(), '\0');
+    std::fill(confirmation.begin(), confirmation.end(), '\0');
+    return send_json_(request, 500, "{\"message\":\"Could not save the administrator password\"}");
+  }
+
+  std::fill(password.begin(), password.end(), '\0');
+  std::fill(confirmation.begin(), confirmation.end(), '\0');
+  this->set_status_("Administrator password changed; restarting gateway");
+  this->reboot_at_ = millis() + 2000;
+  this->reboot_pending_.store(true);
+  send_json_(request, 200, "{\"message\":\"Password changed; sign in again after restart\"}");
+}
+
+void NightmatiqMesh::handle_auto_update_(AsyncWebServerRequest *request) {
+  if (this->cloud_busy_.load() || this->auto_update_running_.load() ||
+      this->reboot_pending_.load())
+    return send_json_(request, 409, "{\"message\":\"Gateway is busy\"}");
+
+  const std::string version = request->arg("version").c_str();
+  const std::string url = request->arg("url").c_str();
+  const std::string digest_text = request->arg("sha256").c_str();
+  uint32_t image_size = 0;
+  std::array<uint16_t, 3> target_version{};
+  std::array<uint16_t, 3> current_version{};
+  std::array<uint8_t, 32> digest{};
+  if (!parse_version_(version, target_version) ||
+      !parse_version_(ESPHOME_PROJECT_VERSION, current_version) ||
+      target_version <= current_version || !parse_sha256_(digest_text, digest) ||
+      !parse_u32_(request->arg("size").c_str(), 1, UINT32_MAX, image_size))
+    return send_json_(request, 400,
+                      "{\"message\":\"Invalid or non-newer firmware release\"}");
+
+  const std::string expected_url = std::string(RELEASE_DOWNLOAD_PREFIX) + version + "/" +
+                                   RELEASE_ASSET_PREFIX + version + "-ota.bin";
+  const esp_partition_t *partition = esp_ota_get_next_update_partition(nullptr);
+  if (url != expected_url || url.size() > AUTO_UPDATE_URL_MAX_LENGTH ||
+      partition == nullptr || image_size > partition->size)
+    return send_json_(request, 400,
+                      "{\"message\":\"Release does not contain a valid OTA image\"}");
+
+  StoredAutoUpdate update{};
+  update.image_size = image_size;
+  std::memcpy(update.target_version, version.data(), version.size());
+  std::memcpy(update.url, url.data(), url.size());
+  update.sha256 = digest;
+  if (!this->save_auto_update_(update))
+    return send_json_(request, 500,
+                      "{\"message\":\"Could not save the firmware update request\"}");
+
+  this->set_status_("Firmware update scheduled; restarting into update mode");
+  this->reboot_at_ = millis() + 1500;
+  this->reboot_pending_.store(true);
+  send_json_(request, 200,
+             "{\"message\":\"Update scheduled; the gateway will download and verify it after restart\"}");
 }
 
 bool NightmatiqMesh::cloud_get_(const std::string &path, const std::string &email, const std::string &password,
@@ -1705,10 +2174,12 @@ bool NightmatiqMesh::start_cloud_job_(CloudJob job, const std::string &email, co
     return false;
   }
 
-  this->cloud_ble_pause_deadline_.store(millis() + 7500);
+  this->cloud_api_shutdown_started_.store(false);
+  this->cloud_api_shutdown_pending_.store(true);
+  this->cloud_api_shutdown_deadline_.store(millis() + CLOUD_API_SHUTDOWN_TIMEOUT_MS);
   this->cloud_pending_args_.store(args);
   this->pause_ble_for_cloud_();
-  ESP_LOGI(WEB_TAG, "Cloud request queued until Bluetooth releases its memory");
+  ESP_LOGI(WEB_TAG, "Cloud request queued until ESPHome API and Bluetooth release their memory");
   return true;
 }
 
@@ -1716,6 +2187,39 @@ void NightmatiqMesh::advance_cloud_job_() {
   CloudTaskArgs *pending = this->cloud_pending_args_.load();
   if (pending == nullptr)
     return;
+
+  if (this->cloud_api_shutdown_pending_.load()) {
+    if (api::global_api_server != nullptr &&
+        !this->cloud_api_shutdown_started_.exchange(true)) {
+      api::global_api_server->on_shutdown();
+      ESP_LOGI(WEB_TAG, "Closing ESPHome API clients before Steinel HTTPS");
+    }
+
+    const bool api_released =
+        api::global_api_server == nullptr || api::global_api_server->teardown();
+    if (!api_released) {
+      const uint32_t deadline = this->cloud_api_shutdown_deadline_.load();
+      if (static_cast<int32_t>(millis() - deadline) < 0)
+        return;
+      pending = this->cloud_pending_args_.exchange(nullptr);
+      if (pending == nullptr)
+        return;
+      std::fill(pending->email.begin(), pending->email.end(), '\0');
+      std::fill(pending->password.begin(), pending->password.end(), '\0');
+      delete pending;
+      this->cloud_api_shutdown_pending_.store(false);
+      this->cloud_busy_.store(false);
+      this->schedule_cloud_session_reboot_(CLOUD_ERROR_REBOOT_DELAY_MS);
+      this->set_status_("Could not close Home Assistant connection for HTTPS");
+      return;
+    }
+
+    this->cloud_api_shutdown_pending_.store(false);
+    this->cloud_ble_pause_deadline_.store(millis() + 7500);
+    this->cloud_ble_pause_pending_.store(true);
+    ESP_LOGI(WEB_TAG, "ESPHome API stopped; releasing Bluetooth memory");
+    return;
+  }
 
   const bool bluetooth_released =
       esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_IDLE &&
@@ -1731,7 +2235,6 @@ void NightmatiqMesh::advance_cloud_job_() {
     std::fill(pending->password.begin(), pending->password.end(), '\0');
     delete pending;
     this->cloud_busy_.store(false);
-    this->cloud_ble_resume_pending_.store(true);
     this->schedule_cloud_session_reboot_(CLOUD_ERROR_REBOOT_DELAY_MS);
     this->set_status_("Could not release Bluetooth memory for HTTPS");
     return;
@@ -1752,7 +2255,6 @@ void NightmatiqMesh::advance_cloud_job_() {
     std::fill(pending->password.begin(), pending->password.end(), '\0');
     delete pending;
     this->cloud_busy_.store(false);
-    this->cloud_ble_resume_pending_.store(true);
     this->schedule_cloud_session_reboot_(CLOUD_ERROR_REBOOT_DELAY_MS);
     this->set_status_("Could not start cloud task after Bluetooth release; largest block " +
                       std::to_string(largest_internal) + " bytes");
@@ -1786,7 +2288,6 @@ void NightmatiqMesh::cloud_task_(void *parameter) {
     args->owner->schedule_cloud_session_reboot_(CLOUD_ERROR_REBOOT_DELAY_MS);
   }
   args->owner->cloud_busy_.store(false);
-  args->owner->cloud_ble_resume_pending_.store(true);
   ESP_LOGI(WEB_TAG, "Cloud task finished: free internal heap=%u, stack high-water=%u",
            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
            static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));

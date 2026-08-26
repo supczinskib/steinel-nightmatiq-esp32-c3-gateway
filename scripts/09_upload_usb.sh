@@ -8,8 +8,6 @@ source "$ROOT_DIR/scripts/lib.sh"
 PORT="$1"
 [[ -e "$PORT" ]] || { echo "Serial port does not exist: $PORT"; exit 1; }
 ESPHOME_BIN="$(find_esphome)"
-patch_esphome "$ESPHOME_BIN"
-require_secrets "$ROOT_DIR"
 
 cd "$ROOT_DIR/esphome"
 "$ESPHOME_BIN" clean nightmatiq-c3.yaml

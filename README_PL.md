@@ -1,6 +1,6 @@
 # Bramka Steinel NightmatIQ Plus dla ESP32-C3
 
-[English README](README.md)
+[English](README.md) · [Deutsch](README_DE.md)
 
 > **Samodzielna bramka Bluetooth Mesh dla ESP32-C3 zapewniająca lokalne sterowanie Steinel NightmatIQ Plus, diagnostykę, aktualizacje firmware i integrację z Home Assistant.**
 
@@ -9,8 +9,6 @@ Steinel NightmatIQ Plus <-> Bluetooth Mesh <-> bramka ESP32-C3 -> Home Assistant
 ```
 
 Społecznościowy firmware ESPHome zmieniający ESP32-C3 Super Mini w dedykowaną, lokalną bramkę Steinel NightmatIQ Plus. Importuje istniejącą konfigurację sieci Steinel, komunikuje się bezpośrednio przez Bluetooth Mesh, udostępnia chroniony hasłem interfejs przeglądarkowy oraz przekazuje do Home Assistant encje sterujące, pomiarowe, identyfikacyjne i diagnostyczne.
-
-Wersja 1.0.0 zapewnia automatyczny wybór i odzyskiwanie adresu źródłowego Bluetooth Mesh, trwałe potwierdzenie działającego adresu, dwujęzyczne sterowanie lokalne, instalację przez USB i OTA, aktualizację firmware z przeglądarki oraz opcjonalne zwarte okno sterowania Home Assistant.
 
 Autor i opiekun projektu: **Bartosz Supcziński** — <bartek@env.pl>
 
@@ -68,7 +66,7 @@ Opcjonalny moduł interfejsu łączy stan sensora, natężenie oświetlenia, try
 - Zainstalowana konfiguracja i rozszerzona diagnostyka.
 - RSSI Mesh oraz liczniki odpowiedzi.
 - Chroniona hasłem aktualizacja OTA z przeglądarki.
-- Polski i angielski język wybierany na podstawie ustawień przeglądarki.
+- Panel **Gateway administration** obejmujący aktualizację firmware, zarządzanie hasłem administratora i pełny reset fabryczny.
 
 ### Integracja z Home Assistant
 
@@ -103,7 +101,9 @@ Firmware jest przeznaczony dla ESP32-C3 i ESP-IDF. Rozszerzone funkcje Bluetooth
 
 ## Bezpieczeństwo
 
-- Hasła Wi-Fi, OTA, awaryjnego AP i interfejsu WWW znajdują się wyłącznie w `esphome/secrets.yaml`, który jest wykluczony z Git.
+- Fabryczne konto administratora to `admin` z hasłem `12345678`; zmień je na stronie urządzenia natychmiast po połączeniu z Wi-Fi.
+- Hasło administratora chroni lokalną stronę i aktualizacje firmware oraz jest zapisywane w NVS ESP32.
+- Punkt dostępowy do konfiguracji używa fabrycznego hasła `12345678`.
 - Dane konta Steinel wpisane na stronie konfiguracji są używane do wymaganych połączeń HTTPS i nigdy nie są zapisywane przez bramkę.
 - Lokalny interfejs WWW używa uwierzytelniania HTTP Digest. Chroni ono dostęp, ale nie szyfruje lokalnego ruchu HTTP.
 - Domyślna konfiguracja natywnego API ESPHome nie używa klucza szyfrowania.
@@ -116,10 +116,22 @@ Firmware jest przeznaczony dla ESP32-C3 i ESP-IDF. Rozszerzone funkcje Bluetooth
 |---|---|
 | `esphome/nightmatiq-c3.yaml` | Główna konfiguracja firmware ESPHome |
 | `esphome/components/nightmatiq_mesh/` | Komponent Bluetooth Mesh, Steinel Cloud i lokalnego WWW |
-| `esphome/secrets.example.yaml` | Publiczny szablon sekretów |
 | `scripts/` | Instalacja, walidacja, USB i OTA |
 | `home-assistant/` | Opcjonalny pakiet i zwarte okno sterowania Home Assistant |
 | `docs/images/` | Publiczne obrazy README |
+
+## Instalacja gotowego firmware
+
+Zalecana pierwsza instalacja nie wymaga kompilowania ESPHome:
+
+1. Pobierz najnowszy plik `steinel-nightmatiq-esp32-c3-gateway-vX.Y.Z-factory.bin` z [wydań GitHub](https://github.com/supczinskib/steinel-nightmatiq-esp32-c3-gateway/releases/latest).
+2. Otwórz [ESPHome Web](https://web.esphome.io/) w przeglądarce obsługującej WebSerial i podłącz ESP32-C3 przez USB.
+3. Wybierz płytkę, użyj **Install** i wskaż pobrany plik `-factory.bin`.
+4. Po instalacji przejdź do sekcji **Połączenie z Wi-Fi** i **Połączenie z NightmatIQ** poniżej.
+
+ESPHome Web przetwarza plik lokalnie. Obraz `-factory.bin` służy do nowej płytki lub odzyskiwania przez USB; późniejsze aktualizacje z przeglądarki używają obrazu `-ota.bin`.
+
+## Budowanie ze źródeł
 
 ## Wymagania
 
@@ -129,7 +141,7 @@ Firmware jest przeznaczony dla ESP32-C3 i ESP-IDF. Rozszerzone funkcje Bluetooth
 - dostęp sieciowy do ESP32-C3 i Steinel Cloud podczas pierwszej konfiguracji;
 - Home Assistant jest opcjonalny.
 
-Dostarczony instalator tworzy odizolowane, powtarzalne środowisko ESPHome ze wszystkimi wymaganiami projektu.
+Dostarczony instalator tworzy odizolowane, powtarzalne środowisko z niezmodyfikowanym ESPHome `2026.7.3`. Do zainstalowanego pakietu ESPHome nie jest nakładany żaden patch.
 
 ## 1. Pobranie i przygotowanie projektu
 
@@ -139,36 +151,15 @@ Sklonuj lub pobierz repozytorium, przejdź do jego katalogu i zainstaluj przypi�
 sudo bash scripts/01_install_esphome.sh
 ```
 
-## 2. Konfiguracja sekretów
-
-Uruchom interaktywny konfigurator:
-
-```bash
-bash scripts/02_configure_secrets.sh
-```
-
-Skrypt tworzy `esphome/secrets.yaml` zawierający:
-
-- nazwę i hasło Wi-Fi;
-- hasło OTA;
-- hasło awaryjnego punktu dostępowego;
-- nazwę użytkownika i hasło lokalnego interfejsu WWW.
-
-Możesz również ręcznie skopiować i uzupełnić przykład:
-
-```bash
-cp esphome/secrets.example.yaml esphome/secrets.yaml
-```
-
-## 3. Walidacja i budowanie
+## 2. Walidacja
 
 ```bash
 bash scripts/03_validate_all.sh
 ```
 
-Polecenie wykonuje kontrolę repozytorium, sprawdza konfigurację ESPHome i buduje firmware.
+Polecenie wykonuje kontrolę repozytorium i sprawdza konfigurację ESPHome.
 
-## 4. Pierwsza instalacja lub odzyskiwanie przez USB
+## 3. Pierwsza instalacja lub odzyskiwanie przez USB
 
 Podłącz ESP32-C3 i w miarę możliwości użyj stabilnej ścieżki `/dev/serial/by-id/`:
 
@@ -182,28 +173,42 @@ Jeżeli płytka nie ma dowiązania `by-id`, użyj wykrytego portu ACM:
 sudo bash scripts/09_upload_usb.sh /dev/ttyACM0
 ```
 
-Pierwsza instalacja przez USB przygotowuje urządzenie do kolejnych aktualizacji OTA, dlatego później zwykle nie trzeba używać przycisku BOOT.
+Ten sam skompilowany obraz można zainstalować na każdej obsługiwanej płytce ESP32-C3. Pierwsza instalacja przez USB przygotowuje urządzenie do kolejnych aktualizacji z przeglądarki, dlatego później zwykle nie trzeba używać przycisku BOOT.
+
+## 4. Połączenie z Wi-Fi
+
+1. Połącz się z punktem dostępowym `nightmatiq-gateway-XXXXXX`, używając hasła `12345678`.
+2. W portalu konfiguracji wybierz docelową sieć Wi-Fi 2,4 GHz i wpisz jej hasło.
+3. Poczekaj, aż bramka uruchomi się ponownie i połączy z wybraną siecią.
+4. Otwórz adres przydzielony przez router albo nazwę urządzenia zakończoną `.local`.
+
+Konfiguracja Wi-Fi jest zapisywana przez urządzenie i pozostaje po aktualizacji firmware.
 
 ## 5. Połączenie z NightmatIQ
 
 1. Otwórz adres bramki w przeglądarce.
-2. Zaloguj się danymi lokalnego interfejsu WWW z `secrets.yaml`.
-3. Wpisz dane konta Steinel Cloud.
-4. Pobierz listę sieci.
-5. Wybierz sieć zawierającą NightmatIQ.
-6. Zainstaluj konfigurację i poczekaj na restart bramki.
+2. Zaloguj się jako `admin`, używając fabrycznego hasła `12345678`.
+3. W panelu **Gateway administration** zmień hasło w widocznej sekcji **Administrator access**. To samo nowe hasło będzie zatwierdzało kolejne aktualizacje firmware.
+4. Po automatycznym restarcie zaloguj się ponownie.
+5. Wpisz dane konta Steinel Cloud i pobierz listę sieci.
+6. Wybierz sieć zawierającą NightmatIQ.
+7. Zainstaluj konfigurację i poczekaj na restart bramki.
 
 Adres węzła NightmatIQ i IV Index zwykle mogą zostać wybrane automatycznie z kopii sieci. Dane logowania pozostają tylko w formularzu przeglądarki na czas żądań konfiguracyjnych.
 
 ## 6. Aktualizacja przez Wi-Fi
 
-Z wiersza poleceń:
+Po otwarciu strony bramka sprawdza najnowsze stabilne wydanie GitHub; **CHECK FOR UPDATES** powtarza sprawdzenie ręcznie. Gdy dostępna jest nowsza wersja, **DOWNLOAD AND INSTALL** pobiera ją przez HTTPS, sprawdza rozmiar i sumę SHA-256, instaluje oraz restartuje bramkę. Nieudana aktualizacja pozostawia dotychczasowy firmware aktywny.
+
+Instalacja ręczna pozostaje dostępna w sekcji **Manual firmware file**. Używaj wyłącznie pliku wydania zakończonego `-ota.bin`; `-factory.bin` służy tylko do pierwszej instalacji przez USB. Użytkownik nie otrzymuje ani nie musi znać osobnego „hasła OTA”.
+
+**Factory reset** usuwa ustawienia Wi-Fi, administratora i NightmatIQ Mesh, a następnie przywraca fabryczne konto i punkt dostępowy bez zmiany zainstalowanej wersji firmware.
+
+Z wiersza poleceń — podaj hasło administratora, gdy skrypt o nie poprosi:
 
 ```bash
 bash scripts/05_upload_ota.sh ADRES_IP_LUB_NAZWA_HOSTA
 ```
-
-Możesz również otworzyć stronę bramki, wskazać plik firmware ESPHome `.bin` w sekcji **Aktualizacja firmware** i rozpocząć instalację. Bramka sprawdzi obraz i automatycznie się zrestartuje.
 
 ## 7. Integracja z Home Assistant
 
@@ -233,11 +238,11 @@ Moduł dostosowuje automatycznie wygenerowany kafelek obszaru i okno szczegół�
 
 Podczas importu sieci każda bramka wyznacza politykę adresu Mesh na podstawie wybranej instalacji i własnej tożsamości sprzętowej. Ten sam firmware można dzięki temu skonfigurować dla różnych płytek ESP32-C3 i instalacji NightmatIQ.
 
-Przed zainstalowaniem konfiguracji na więcej niż jednym ESP32-C3 nadaj każdej bramce unikalną nazwę ESPHome albo włącz `name_add_mac_suffix`. Ustawienia Wi-Fi mogą być wspólne; zalecane są unikalne hasła OTA i WWW.
+Sufiks MAC w nazwie urządzenia jest domyślnie włączony, dlatego wiele bramek otrzymuje unikalne nazwy hostów i punktów dostępowych. Na każdej bramce ustaw osobne hasło administratora.
 
 ## Awaryjny punkt dostępowy
 
-Jeżeli skonfigurowana sieć Wi-Fi jest niedostępna przez 90 sekund, bramka uruchamia chroniony hasłem punkt dostępowy **NightmatIQ Fallback**. Połącz się z nim, używając `fallback_ap_password` z `secrets.yaml`, i zmień konfigurację Wi-Fi w portalu przechwytującym.
+Jeżeli skonfigurowana sieć Wi-Fi jest niedostępna przez 90 sekund, bramka ponownie uruchamia chroniony punkt dostępowy. Połącz się z nim fabrycznym hasłem AP `12345678` i zmień konfigurację Wi-Fi w portalu. Lokalna strona nadal jest chroniona hasłem administratora wybranym na urządzeniu.
 
 ## Rozwiązywanie problemów
 
@@ -261,7 +266,7 @@ Jeżeli skonfigurowana sieć Wi-Fi jest niedostępna przez 90 sekund, bramka uru
 
 ### Aktualizacja OTA nie działa
 
-- Sprawdź adres urządzenia i hasło OTA.
+- Sprawdź adres urządzenia i hasło administratora bramki.
 - Użyj aktualizacji z przeglądarki w zaufanej sieci LAN.
 - Jeżeli urządzenie nie łączy się już z Wi-Fi, odzyskaj je przez natywny port USB.
 

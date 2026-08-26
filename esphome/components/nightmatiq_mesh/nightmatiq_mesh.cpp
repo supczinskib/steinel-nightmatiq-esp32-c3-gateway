@@ -10,7 +10,6 @@
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 #include "esphome/components/esp32_ble/ble.h"
-#include "esphome/components/esp32_ble_tracker/esp32_ble_tracker.h"
 
 #include "esp_ble_mesh_common_api.h"
 #include "esp_ble_mesh_config_model_api.h"
@@ -22,6 +21,7 @@
 #include "esp_bt_main.h"
 #include "esp_heap_caps.h"
 #include "esp_idf_version.h"
+#include "esp_ota_ops.h"
 
 // ESP-IDF exposes read/delete operations for provisioner nodes publicly, but
 // its settings loader uses this internal restore entry point to rebuild the
@@ -44,18 +44,24 @@ static constexpr uint8_t MESSAGE_TTL = 7;
 // timeout made a user command wait behind a missed background response. Keep
 // routine Access requests short; Composition Data has its own longer timeout.
 static constexpr uint32_t MESSAGE_TIMEOUT_MS = 1200;
+
+static void reboot_after_confirming_firmware() {
+  const esp_err_t result = esp_ota_mark_app_valid_cancel_rollback();
+  if (result != ESP_OK)
+    ESP_LOGW(TAG, "Could not confirm the running firmware before restart: %s",
+             esp_err_to_name(result));
+  App.safe_reboot();
+}
 static constexpr uint32_t COMPOSITION_MESSAGE_TIMEOUT_MS = 4000;
 static constexpr uint32_t FAST_CONTROL_STEP_MS = 120;
 static constexpr uint32_t MODE_CONFIRMATION_GRACE_MS = 10000;
 static constexpr uint32_t IDENTITY_SCAN_WINDOW_MS = 30000;
 static constexpr uint32_t IDENTITY_SCAN_PREPARE_TIMEOUT_MS = 15000;
+static constexpr uint32_t IDENTITY_SCAN_STOP_TIMEOUT_MS = 2000;
 static constexpr uint32_t IDENTITY_SCAN_COMMAND_SETTLE_MS = 250;
 // Match the Android scanner that receives the Steinel SCAN_RSP: active BLE
 // scanning with a 100 ms interval and a full 100 ms window.
 static constexpr uint32_t IDENTITY_SCAN_INTERVAL_UNITS = 160;
-static constexpr uint32_t NORMAL_SCAN_INTERVAL_UNITS = 512;
-static constexpr uint32_t NORMAL_SCAN_WINDOW_UNITS = 48;
-static constexpr uint32_t NORMAL_SCAN_DURATION_SECONDS = 300;
 static constexpr uint8_t COMPOSITION_FAST_RETRY_LIMIT = 3;
 static constexpr uint32_t COMPOSITION_FAST_RETRY_MS = 1500;
 static constexpr uint32_t COMPOSITION_BACKGROUND_RETRY_MS = 60000;
@@ -185,58 +191,69 @@ bool NightmatiqMesh::resolve_firmware_version_(uint8_t &major, uint8_t &minor,
   return false;
 }
 
-#ifdef USE_ESP32_BLE_DEVICE
-bool NightmatiqMesh::parse_device(const esp32_ble_tracker::ESPBTDevice &device) {
+bool NightmatiqMesh::parse_scan_result_(const esp32_ble::BLEScanResult &result) {
   if (!this->identity_scan_pending_.load())
     return false;
 
-  const auto steinel_uuid = esp32_ble::ESPBTUUID::from_uint16(STEINEL_COMPANY_ID);
-  for (const auto &manufacturer : device.get_manufacturer_datas()) {
-    if (manufacturer.uuid != steinel_uuid || manufacturer.data.size() < 7)
+  const size_t total_length = static_cast<size_t>(result.adv_data_len) + result.scan_rsp_len;
+  size_t offset = 0;
+  while (offset < total_length) {
+    const uint8_t field_length = result.ble_adv[offset++];
+    if (field_length == 0)
       continue;
-    const auto &data = manufacturer.data;
-    const uint16_t product_id = static_cast<uint16_t>(data[0]) |
-                                (static_cast<uint16_t>(data[1]) << 8);
-    if (product_id != NIGHTMATIQ_PRODUCT_ID)
+    if (offset + field_length > total_length)
+      break;
+
+    const uint8_t field_type = result.ble_adv[offset++];
+    const size_t value_length = static_cast<size_t>(field_length) - 1;
+    const uint8_t *value = result.ble_adv + offset;
+    offset += value_length;
+    if (field_type != ESP_BLE_AD_MANUFACTURER_SPECIFIC_TYPE || value_length < 2)
       continue;
 
-    return this->capture_advertised_identity_(data.data(), data.size(), device.get_rssi());
+    const uint16_t company_id = static_cast<uint16_t>(value[0]) |
+                                (static_cast<uint16_t>(value[1]) << 8);
+    if (company_id != STEINEL_COMPANY_ID)
+      continue;
+    if (this->capture_advertised_identity_(value + 2, value_length - 2, result.rssi))
+      return true;
   }
   return false;
 }
-#endif
 
-bool NightmatiqMesh::parse_devices(const esp32_ble::BLEScanResult *scan_results, size_t count) {
-  if (!this->identity_scan_pending_.load() || scan_results == nullptr)
-    return false;
-
-  for (size_t result_index = 0; result_index < count; result_index++) {
-    const auto &result = scan_results[result_index];
-    const size_t total_length = static_cast<size_t>(result.adv_data_len) + result.scan_rsp_len;
-    size_t offset = 0;
-    while (offset < total_length) {
-      const uint8_t field_length = result.ble_adv[offset++];
-      if (field_length == 0)
-        continue;
-      if (offset + field_length > total_length)
-        break;
-
-      const uint8_t field_type = result.ble_adv[offset++];
-      const size_t value_length = static_cast<size_t>(field_length) - 1;
-      const uint8_t *value = result.ble_adv + offset;
-      offset += value_length;
-      if (field_type != ESP_BLE_AD_MANUFACTURER_SPECIFIC_TYPE || value_length < 2)
-        continue;
-
-      const uint16_t company_id = static_cast<uint16_t>(value[0]) |
-                                  (static_cast<uint16_t>(value[1]) << 8);
-      if (company_id != STEINEL_COMPANY_ID)
-        continue;
-      if (this->capture_advertised_identity_(value + 2, value_length - 2, result.rssi))
-        return true;
-    }
+void NightmatiqMesh::gap_scan_event_handler(const esp32_ble::BLEScanResult &scan_result) {
+  if (scan_result.search_evt == ESP_GAP_SEARCH_INQ_CMPL_EVT) {
+    this->identity_scan_stop_ready_.store(true);
+    return;
   }
-  return false;
+  this->parse_scan_result_(scan_result);
+}
+
+void NightmatiqMesh::gap_event_handler(esp_gap_ble_cb_event_t event,
+                                       esp_ble_gap_cb_param_t *param) {
+  if (!this->identity_scan_pending_.load() || param == nullptr)
+    return;
+  switch (event) {
+    case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
+      if (param->scan_param_cmpl.status == ESP_BT_STATUS_SUCCESS)
+        this->identity_scan_params_ready_.store(true);
+      else
+        this->identity_scan_command_error_.store(true);
+      break;
+    case ESP_GAP_BLE_SCAN_START_COMPLETE_EVT:
+      if (param->scan_start_cmpl.status == ESP_BT_STATUS_SUCCESS)
+        this->identity_scan_start_ready_.store(true);
+      else
+        this->identity_scan_command_error_.store(true);
+      break;
+    case ESP_GAP_BLE_SCAN_STOP_COMPLETE_EVT:
+      if (param->scan_stop_cmpl.status != ESP_BT_STATUS_SUCCESS)
+        this->identity_scan_command_error_.store(true);
+      this->identity_scan_stop_ready_.store(true);
+      break;
+    default:
+      break;
+  }
 }
 
 bool NightmatiqMesh::capture_advertised_identity_(const uint8_t *data, size_t length, int16_t rssi) {
@@ -271,137 +288,132 @@ bool NightmatiqMesh::capture_advertised_identity_(const uint8_t *data, size_t le
 }
 
 void NightmatiqMesh::begin_identity_scan_() {
-  auto *tracker = esp32_ble_tracker::global_esp32_ble_tracker;
   this->identity_found_this_boot_.store(false);
   this->advertised_identity_fresh_.store(false);
   this->identity_scan_started_ = false;
-  this->identity_scan_phase_ = IdentityScanPhase::WAIT_FOR_IDLE;
+  this->identity_scan_phase_ = IdentityScanPhase::WAIT_FOR_BLE;
   this->identity_scan_action_at_ = 0;
-  if (tracker == nullptr) {
-    ESP_LOGW(TAG, "ESPHome BLE tracker is unavailable; skipping NightmatIQ identity scan");
-    this->identity_scan_pending_.store(false);
-    this->mesh_start_pending_ = true;
-    this->mesh_start_not_before_ = millis() + 250;
-    this->mesh_start_deadline_ = millis() + 7500;
-    this->set_status_("Preparing Bluetooth Mesh");
-    return;
-  }
-
-  tracker->set_scan_active(true);
-  tracker->set_scan_continuous(false);
-  tracker->set_scan_own_address_type(BLE_ADDR_TYPE_RANDOM);
-  tracker->set_scan_interval(IDENTITY_SCAN_INTERVAL_UNITS);
-  tracker->set_scan_window(IDENTITY_SCAN_INTERVAL_UNITS);
-  tracker->set_scan_duration(IDENTITY_SCAN_WINDOW_MS / 1000);
+  this->identity_scan_params_ready_.store(false);
+  this->identity_scan_start_ready_.store(false);
+  this->identity_scan_stop_ready_.store(false);
+  this->identity_scan_command_error_.store(false);
+  this->identity_scan_params_ = {};
+  this->identity_scan_params_.scan_type = BLE_SCAN_TYPE_ACTIVE;
+  this->identity_scan_params_.own_addr_type = BLE_ADDR_TYPE_RANDOM;
+  this->identity_scan_params_.scan_filter_policy = BLE_SCAN_FILTER_ALLOW_ALL;
+  this->identity_scan_params_.scan_interval = IDENTITY_SCAN_INTERVAL_UNITS;
+  this->identity_scan_params_.scan_window = IDENTITY_SCAN_INTERVAL_UNITS;
+  this->identity_scan_params_.scan_duplicate = BLE_SCAN_DUPLICATE_DISABLE;
   this->identity_scan_pending_.store(true);
   this->identity_scan_deadline_ = millis() + IDENTITY_SCAN_PREPARE_TIMEOUT_MS;
   this->set_status_("Reading NightmatIQ device report");
-
-  const auto state = tracker->get_scanner_state();
-  if (state == esp32_ble_tracker::ScannerState::RUNNING) {
-    // Restart an existing proxy scan with the temporary identity parameters.
-    // ESPHome owns the complete scanner state machine; our pinned patch only
-    // selects the random scanner address required by NightmatIQ.
-    tracker->stop_scan();
-  }
 }
 
 void NightmatiqMesh::advance_identity_scan_() {
   if (!this->identity_scan_pending_.load())
     return;
   const uint32_t now = millis();
-  auto *tracker = esp32_ble_tracker::global_esp32_ble_tracker;
-  if (tracker == nullptr) {
-    this->identity_scan_pending_.store(false);
-  } else {
-    const auto state = tracker->get_scanner_state();
-    const bool expired = static_cast<int32_t>(now - this->identity_scan_deadline_) >= 0;
+  const bool expired = static_cast<int32_t>(now - this->identity_scan_deadline_) >= 0;
 
-    if (!this->identity_scan_started_) {
-      if (state == esp32_ble_tracker::ScannerState::RUNNING) {
-        if (this->identity_scan_phase_ == IdentityScanPhase::WAIT_FOR_SCAN_START) {
-          this->identity_scan_started_ = true;
-          this->identity_scan_phase_ = IdentityScanPhase::RUNNING;
-          this->identity_scan_deadline_ = now + IDENTITY_SCAN_WINDOW_MS;
-          ESP_LOGI(TAG, "Active NightmatIQ identity scan started with a random scanner address");
-          return;
-        }
-        tracker->stop_scan();
+  if (this->identity_scan_phase_ == IdentityScanPhase::WAIT_FOR_SCAN_STOP) {
+    if (!this->identity_scan_stop_ready_.exchange(false) && !expired)
+      return;
+    this->finish_identity_scan_();
+    return;
+  }
+
+  if (this->identity_scan_command_error_.load() || expired) {
+    if (this->identity_scan_started_) {
+      const esp_err_t error = esp_ble_gap_stop_scanning();
+      if (error != ESP_OK && error != ESP_ERR_INVALID_STATE)
+        ESP_LOGE(TAG, "Could not stop NightmatIQ identity scan: %s", esp_err_to_name(error));
+      if (error == ESP_ERR_INVALID_STATE)
+        this->identity_scan_stop_ready_.store(true);
+      this->identity_scan_command_error_.store(false);
+      this->identity_scan_phase_ = IdentityScanPhase::WAIT_FOR_SCAN_STOP;
+      this->identity_scan_deadline_ = now + IDENTITY_SCAN_STOP_TIMEOUT_MS;
+      return;
+    }
+    this->finish_identity_scan_();
+    return;
+  }
+
+  switch (this->identity_scan_phase_) {
+    case IdentityScanPhase::WAIT_FOR_BLE: {
+      if (esp32_ble::global_ble == nullptr || !esp32_ble::global_ble->is_active() ||
+          esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_ENABLED)
+        return;
+      esp_bd_addr_t random_address{};
+      esp_ble_gap_addr_create_static(random_address);
+      const esp_err_t error = esp_ble_gap_set_rand_addr(random_address);
+      if (error != ESP_OK) {
+        ESP_LOGE(TAG, "Could not set random BLE scanner address: %s", esp_err_to_name(error));
+        this->identity_scan_command_error_.store(true);
         return;
       }
-      if (state == esp32_ble_tracker::ScannerState::STARTING ||
-          state == esp32_ble_tracker::ScannerState::STOPPING) {
-        if (!expired)
-          return;
-      } else if (state == esp32_ble_tracker::ScannerState::IDLE && !expired) {
-        if (this->identity_scan_phase_ == IdentityScanPhase::WAIT_FOR_IDLE) {
-          // The tracker component is already set up at this point, but the
-          // Bluedroid host is enabled asynchronously from its loop. Calling
-          // esp_ble_gap_set_rand_addr() before that transition completes
-          // returns ESP_ERR_INVALID_STATE and aborts the identity scan.
-          if (esp32_ble::global_ble == nullptr || !esp32_ble::global_ble->is_active() ||
-              esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_ENABLED)
-            return;
-          esp_bd_addr_t random_address{};
-          esp_ble_gap_addr_create_static(random_address);
-          const esp_err_t error = esp_ble_gap_set_rand_addr(random_address);
-          if (error != ESP_OK) {
-            ESP_LOGE(TAG, "Could not set random BLE scanner address: %s", esp_err_to_name(error));
-            this->identity_scan_deadline_ = now;
-            return;
-          }
-          this->identity_scan_phase_ = IdentityScanPhase::WAIT_FOR_RANDOM_ADDRESS;
-          this->identity_scan_action_at_ = now + IDENTITY_SCAN_COMMAND_SETTLE_MS;
-          return;
-        }
-        if (static_cast<int32_t>(now - this->identity_scan_action_at_) < 0)
-          return;
-        if (this->identity_scan_phase_ == IdentityScanPhase::WAIT_FOR_RANDOM_ADDRESS) {
-          tracker->start_scan();
-          this->identity_scan_phase_ = IdentityScanPhase::WAIT_FOR_SCAN_START;
-          this->identity_scan_action_at_ = now + 1000;
-          return;
-        }
-        if (this->identity_scan_phase_ == IdentityScanPhase::WAIT_FOR_SCAN_START) {
-          ESP_LOGE(TAG, "NightmatIQ identity scan did not enter the running state");
-          this->identity_scan_deadline_ = now;
-          return;
-        }
+      this->identity_scan_phase_ = IdentityScanPhase::WAIT_FOR_RANDOM_ADDRESS;
+      this->identity_scan_action_at_ = now + IDENTITY_SCAN_COMMAND_SETTLE_MS;
+      return;
+    }
+    case IdentityScanPhase::WAIT_FOR_RANDOM_ADDRESS:
+      if (static_cast<int32_t>(now - this->identity_scan_action_at_) < 0)
+        return;
+      if (const esp_err_t error = esp_ble_gap_set_scan_params(&this->identity_scan_params_);
+          error != ESP_OK) {
+        ESP_LOGE(TAG, "Could not set NightmatIQ scan parameters: %s", esp_err_to_name(error));
+        this->identity_scan_command_error_.store(true);
+        return;
       }
-    }
-
-    const bool captured = this->identity_found_this_boot_.load();
-    const bool failed = state == esp32_ble_tracker::ScannerState::FAILED;
-    if (!captured && !failed && !expired)
+      this->identity_scan_phase_ = IdentityScanPhase::WAIT_FOR_SCAN_PARAMS;
       return;
-
-    if (state == esp32_ble_tracker::ScannerState::RUNNING) {
-      tracker->stop_scan();
+    case IdentityScanPhase::WAIT_FOR_SCAN_PARAMS:
+      if (!this->identity_scan_params_ready_.exchange(false))
+        return;
+      if (const esp_err_t error = esp_ble_gap_start_scanning(IDENTITY_SCAN_WINDOW_MS / 1000U);
+          error != ESP_OK) {
+        ESP_LOGE(TAG, "Could not start NightmatIQ identity scan: %s", esp_err_to_name(error));
+        this->identity_scan_command_error_.store(true);
+        return;
+      }
+      this->identity_scan_phase_ = IdentityScanPhase::WAIT_FOR_SCAN_START;
       return;
-    }
-    if (state == esp32_ble_tracker::ScannerState::STARTING ||
-        state == esp32_ble_tracker::ScannerState::STOPPING)
+    case IdentityScanPhase::WAIT_FOR_SCAN_START:
+      if (!this->identity_scan_start_ready_.exchange(false))
+        return;
+      this->identity_scan_started_ = true;
+      this->identity_scan_phase_ = IdentityScanPhase::RUNNING;
+      this->identity_scan_deadline_ = now + IDENTITY_SCAN_WINDOW_MS;
+      ESP_LOGI(TAG, "Active NightmatIQ identity scan started with a random scanner address");
       return;
-
-    // Restore the gateway's normal setup-scan parameters before
-    // handing the radio to Mesh. This also keeps a later disable/remove cycle
-    // from resuming with the temporary 100% duty-cycle identity scan.
-    tracker->set_scan_active(true);
-    tracker->set_scan_continuous(false);
-    tracker->set_scan_own_address_type(BLE_ADDR_TYPE_PUBLIC);
-    tracker->set_scan_interval(NORMAL_SCAN_INTERVAL_UNITS);
-    tracker->set_scan_window(NORMAL_SCAN_WINDOW_UNITS);
-    tracker->set_scan_duration(NORMAL_SCAN_DURATION_SECONDS);
-    this->identity_scan_pending_.store(false);
+    case IdentityScanPhase::RUNNING:
+      if (!this->identity_found_this_boot_.load() && !this->identity_scan_stop_ready_.load())
+        return;
+      if (!this->identity_scan_stop_ready_.load()) {
+        const esp_err_t error = esp_ble_gap_stop_scanning();
+        if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+          ESP_LOGE(TAG, "Could not stop NightmatIQ identity scan: %s", esp_err_to_name(error));
+          this->identity_scan_command_error_.store(true);
+          return;
+        }
+        if (error == ESP_ERR_INVALID_STATE)
+          this->identity_scan_stop_ready_.store(true);
+      }
+      this->identity_scan_phase_ = IdentityScanPhase::WAIT_FOR_SCAN_STOP;
+      this->identity_scan_deadline_ = now + IDENTITY_SCAN_STOP_TIMEOUT_MS;
+      return;
+    case IdentityScanPhase::WAIT_FOR_SCAN_STOP:
+      return;
   }
+}
 
-  if (!this->identity_found_this_boot_.load()) {
+void NightmatiqMesh::finish_identity_scan_() {
+  if (!this->identity_found_this_boot_.load())
     ESP_LOGW(TAG, "NightmatIQ device report was not received during the active scan window");
-  }
+  this->identity_scan_pending_.store(false);
   this->identity_scan_started_ = false;
   this->mesh_start_pending_ = true;
-  this->mesh_start_not_before_ = now + 250;
-  this->mesh_start_deadline_ = now + 7500;
+  this->mesh_start_not_before_ = millis() + 250;
+  this->mesh_start_deadline_ = millis() + 7500;
   this->set_status_("Preparing Bluetooth Mesh");
 }
 
@@ -651,12 +663,7 @@ void NightmatiqMesh::advance_mesh_start_() {
   if (static_cast<int32_t>(now - this->mesh_start_not_before_) < 0)
     return;
 
-  const bool scan_idle =
-      esp32_ble_tracker::global_esp32_ble_tracker == nullptr ||
-      esp32_ble_tracker::global_esp32_ble_tracker->get_scanner_state() ==
-          esp32_ble_tracker::ScannerState::IDLE ||
-      esp32_ble_tracker::global_esp32_ble_tracker->get_scanner_state() ==
-          esp32_ble_tracker::ScannerState::FAILED;
+  const bool scan_idle = !this->identity_scan_pending_.load() && !this->identity_scan_started_;
   if (!scan_idle) {
     if (static_cast<int32_t>(now - this->mesh_start_deadline_) < 0)
       return;
@@ -697,6 +704,22 @@ void NightmatiqMesh::advance_mesh_remove_() {
   this->set_status_("Configuration removed; gateway ready for setup");
 }
 
+void NightmatiqMesh::advance_factory_reset_() {
+  if (!this->factory_reset_pending_.load() ||
+      static_cast<int32_t>(millis() - this->factory_reset_at_) < 0)
+    return;
+  if (!this->factory_reset_pending_.exchange(false))
+    return;
+
+  ESP_LOGW(TAG, "Erasing all gateway settings and restoring factory defaults");
+  if (!global_preferences->reset()) {
+    this->set_status_("Factory reset failed");
+    return;
+  }
+  delay(100);
+  reboot_after_confirming_firmware();
+}
+
 void NightmatiqMesh::monitor_iv_index_() {
   if (!this->mesh_started_)
     return;
@@ -733,10 +756,63 @@ void NightmatiqMesh::monitor_iv_index_() {
   }
 }
 
+bool NightmatiqMesh::valid_admin_password_(const std::string &password) {
+  if (password.size() < ADMIN_PASSWORD_MIN_LENGTH ||
+      password.size() > ADMIN_PASSWORD_MAX_LENGTH)
+    return false;
+  return std::all_of(password.begin(), password.end(), [](unsigned char value) {
+    return value >= 0x21 && value <= 0x7E;
+  });
+}
+
+bool NightmatiqMesh::load_admin_credentials_() {
+  StoredAdminCredentials stored{};
+  if (!this->admin_credentials_preference_.load(&stored) ||
+      stored.magic != ADMIN_CREDENTIALS_MAGIC ||
+      stored.version != ADMIN_CREDENTIALS_VERSION ||
+      stored.password[ADMIN_PASSWORD_MAX_LENGTH] != '\0') {
+    this->using_factory_admin_password_ = true;
+    return false;
+  }
+
+  const std::string password(stored.password);
+  if (!valid_admin_password_(password)) {
+    this->using_factory_admin_password_ = true;
+    return false;
+  }
+
+  this->web_password_ = password;
+  this->using_factory_admin_password_ = false;
+  return true;
+}
+
+bool NightmatiqMesh::save_admin_password_(const std::string &password) {
+  if (!valid_admin_password_(password))
+    return false;
+
+  StoredAdminCredentials stored{};
+  std::memcpy(stored.password, password.data(), password.size());
+  stored.password[password.size()] = '\0';
+  if (!this->admin_credentials_preference_.save(&stored))
+    return false;
+
+  std::fill(this->web_password_.begin(), this->web_password_.end(), '\0');
+  this->web_password_ = password;
+  this->using_factory_admin_password_ = false;
+  this->apply_admin_credentials_();
+  return true;
+}
+
+void NightmatiqMesh::apply_admin_credentials_() {
+  this->base_->set_auth_username(this->web_username_);
+  this->base_->set_auth_password(this->web_password_);
+  if (this->ota_ != nullptr)
+    this->ota_->set_auth_password(this->web_password_);
+}
+
 void NightmatiqMesh::setup() {
   ESP_LOGCONFIG(TAG, "Setting up NightmatIQ cloud and Bluetooth Mesh client");
   this->instance_ = this;
-  this->base_->add_handler(this);
   this->config_preference_ = global_preferences->make_preference<StoredConfig>(0x4E4D5101U);
   this->device_key_preference_ = global_preferences->make_preference<StoredDeviceKey>(0x4E4D5102U);
   this->retired_address_preference_ =
@@ -748,18 +824,34 @@ void NightmatiqMesh::setup() {
       global_preferences->make_preference<StoredAddressPolicy>(0x4E4D5106U);
   this->address_confirmation_preference_ =
       global_preferences->make_preference<StoredAddressConfirmation>(0x4E4D5107U);
+  this->admin_credentials_preference_ =
+      global_preferences->make_preference<StoredAdminCredentials>(0x4E4D5108U);
+  this->auto_update_preference_ =
+      global_preferences->make_preference<StoredAutoUpdate>(0x4E4D5109U);
+  this->load_admin_credentials_();
+  this->apply_admin_credentials_();
+  this->base_->add_handler(this);
+  const bool auto_update_pending = this->load_auto_update_();
   this->load_advertised_identity_();
   this->load_retired_address_();
   this->load_address_policy_();
   this->load_address_confirmation_();
   if (this->ready_binary_sensor_ != nullptr)
     this->ready_binary_sensor_->publish_state(false);
-  if (!this->load_config_()) {
+  const bool has_config = this->load_config_();
+  if (has_config) {
+    this->load_device_key_();
+    this->mesh_mode_enabled_ =
+        (this->config_.flags & (FLAG_ENABLED | FLAG_REMOVE_PENDING)) != 0;
+  }
+  if (auto_update_pending) {
+    this->set_status_("Firmware update pending; waiting for network");
+    return;
+  }
+  if (!has_config) {
     this->set_status_("Gateway ready; configure NightmatIQ on this page");
     return;
   }
-  this->load_device_key_();
-  this->mesh_mode_enabled_ = (this->config_.flags & (FLAG_ENABLED | FLAG_REMOVE_PENDING)) != 0;
   if (!this->mesh_mode_enabled_) {
     this->set_status_("NightmatIQ disabled; gateway in setup mode");
     return;
@@ -909,6 +1001,7 @@ void NightmatiqMesh::advance_address_recovery_(uint32_t now) {
       !this->address_policy_valid_ || this->current_address_confirmed_() ||
       this->mesh_ready_at_ == 0 ||
       static_cast<uint32_t>(now - this->mesh_ready_at_) < AUTO_ADDRESS_RECOVERY_DELAY_MS ||
+      !this->identity_found_this_boot_.load() ||
       this->mesh_rx_messages_.load() != 0 ||
       this->mesh_tx_accepted_.load() < AUTO_ADDRESS_MIN_ACCEPTED_TX ||
       this->mesh_timeouts_.load() < AUTO_ADDRESS_MIN_TIMEOUTS ||
@@ -1950,16 +2043,27 @@ void NightmatiqMesh::request_refresh() {
 }
 
 void NightmatiqMesh::loop() {
+  this->advance_factory_reset_();
   this->persist_pending_advertised_identity_();
   this->publish_pending_();
+  if (this->auto_update_mode_) {
+    this->advance_auto_update_();
+    const uint32_t update_now = millis();
+    if (this->reboot_pending_.load() &&
+        static_cast<int32_t>(update_now - this->reboot_at_) >= 0) {
+      this->reboot_pending_.store(false);
+      reboot_after_confirming_firmware();
+    }
+    return;
+  }
   this->persist_address_confirmation_();
   this->advance_identity_scan_();
   this->advance_mesh_start_();
   this->advance_mesh_remove_();
   this->monitor_iv_index_();
   if (this->cloud_ble_pause_pending_.exchange(false)) {
-    if (esp32_ble_tracker::global_esp32_ble_tracker != nullptr)
-      esp32_ble_tracker::global_esp32_ble_tracker->stop_scan();
+    if (this->identity_scan_pending_.load())
+      esp_ble_gap_stop_scanning();
     if (esp32_ble::global_ble != nullptr)
       esp32_ble::global_ble->disable();
   }
@@ -1969,13 +2073,13 @@ void NightmatiqMesh::loop() {
   const uint32_t now = millis();
   if (this->reboot_pending_.load() && static_cast<int32_t>(now - this->reboot_at_) >= 0) {
     this->reboot_pending_.store(false);
-    App.safe_reboot();
+    reboot_after_confirming_firmware();
     return;
   }
   if (this->cloud_session_reboot_pending_.load() && !this->cloud_busy_.load() &&
       static_cast<int32_t>(now - this->cloud_session_reboot_at_.load()) >= 0) {
     this->cloud_session_reboot_pending_.store(false);
-    App.safe_reboot();
+    reboot_after_confirming_firmware();
     return;
   }
   if (this->keys_bound_pending_ && static_cast<int32_t>(now - this->keys_bound_at_) >= 0) {
@@ -2134,7 +2238,7 @@ void NightmatiqMesh::loop() {
 void NightmatiqMesh::pause_ble_for_cloud_() {
   if (this->mesh_mode_enabled_)
     return;
-  this->cloud_ble_pause_pending_.store(true);
+  this->cloud_api_shutdown_pending_.store(true);
 }
 
 void NightmatiqMesh::resume_ble_after_cloud_() {

@@ -1,15 +1,17 @@
 substitutions:
-  name: "steinel-nightmatiq-gateway"
+  name: "nightmatiq-gateway"
   friendly_name: "Steinel NightmatIQ Plus"
   device_description: "Standalone Steinel NightmatIQ Plus gateway for ESP32-C3"
   project_name: "envpl.steinel_nightmatiq_gateway"
-  project_version: "1.0.0"
+  project_version: "1.1.0"
+  factory_username: "admin"
+  factory_password: "12345678"
 
 esphome:
   name: "${name}"
   friendly_name: "${friendly_name}"
   comment: "${device_description}"
-  name_add_mac_suffix: false
+  name_add_mac_suffix: true
   min_version: 2026.7.3
   project:
     name: "${project_name}"
@@ -121,8 +123,9 @@ nightmatiq_mesh:
   manufacturer_text_sensor_id: nightmatiq_manufacturer
   company_id_text_sensor_id: nightmatiq_company_id
   product_id_text_sensor_id: nightmatiq_product_id
-  web_username: !secret web_server_username
-  web_password: !secret web_server_password
+  ota_id: nightmatiq_ota
+  web_username: "${factory_username}"
+  web_password: "${factory_password}"
   update_interval: 30s
 
 logger:
@@ -138,15 +141,13 @@ api:
 
 ota:
   - platform: esphome
-    password: !secret ota_password
+    id: nightmatiq_ota
+    password: ""
 
 wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
   power_save_mode: NONE
   ap:
-    ssid: "NightmatIQ Fallback"
-    password: !secret fallback_ap_password
+    password: "${factory_password}"
     ap_timeout: 90s
 
 captive_portal:
@@ -154,20 +155,13 @@ captive_portal:
 mdns:
   disabled: false
 
-esp32_ble_tracker:
-  scan_parameters:
-    continuous: false
-    active: true
-    interval: 320ms
-    window: 30ms
-
 web_server:
   port: 80
   version: 3
   auth:
     type: digest
-    username: !secret web_server_username
-    password: !secret web_server_password
+    username: "${factory_username}"
+    password: "${factory_password}"
 
 binary_sensor:
   - platform: template

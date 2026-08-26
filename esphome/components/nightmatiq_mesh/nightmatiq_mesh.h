@@ -8,7 +8,8 @@
 #include <vector>
 
 #include "esphome/components/binary_sensor/binary_sensor.h"
-#include "esphome/components/esp32_ble_tracker/esp32_ble_tracker.h"
+#include "esphome/components/esp32_ble/ble.h"
+#include "esphome/components/esphome/ota/ota_esphome.h"
 #include "esphome/components/number/number.h"
 #include "esphome/components/select/select.h"
 #include "esphome/components/sensor/sensor.h"
@@ -28,11 +29,10 @@
 namespace esphome {
 namespace nightmatiq_mesh {
 
-class NightmatiqMesh final : public PollingComponent,
-                             public AsyncWebHandler,
-                             public esp32_ble_tracker::ESPBTDeviceListener {
+class NightmatiqMesh final : public PollingComponent, public AsyncWebHandler {
  public:
-  explicit NightmatiqMesh(web_server_base::WebServerBase *base) : base_(base) {}
+  NightmatiqMesh(web_server_base::WebServerBase *base, ESPHomeOTAComponent *ota)
+      : base_(base), ota_(ota) {}
 
   void set_lux_sensor(sensor::Sensor *value) { this->lux_sensor_ = value; }
   void set_rssi_sensor(sensor::Sensor *value) { this->rssi_sensor_ = value; }
@@ -66,13 +66,8 @@ class NightmatiqMesh final : public PollingComponent,
   void update() override;
   void dump_config() override;
   float get_setup_priority() const override;
-#ifdef USE_ESP32_BLE_DEVICE
-  bool parse_device(const esp32_ble_tracker::ESPBTDevice &device) override;
-#endif
-  bool parse_devices(const esp32_ble::BLEScanResult *scan_results, size_t count) override;
-  esp32_ble_tracker::AdvertisementParserType get_advertisement_parser_type() override {
-    return esp32_ble_tracker::AdvertisementParserType::RAW_ADVERTISEMENTS;
-  }
+  void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
+  void gap_scan_event_handler(const esp32_ble::BLEScanResult &scan_result);
 
   bool canHandle(AsyncWebServerRequest *request) const override;
   void handleRequest(AsyncWebServerRequest *request) override;
@@ -114,6 +109,14 @@ class NightmatiqMesh final : public PollingComponent,
   static constexpr uint16_t IV_CACHE_VERSION = 1;
   static constexpr uint32_t ADVERTISED_IDENTITY_MAGIC = 0x4E4D5156U;  // "NMQV"
   static constexpr uint16_t ADVERTISED_IDENTITY_VERSION = 2;
+  static constexpr uint32_t ADMIN_CREDENTIALS_MAGIC = 0x4E4D5157U;  // "NMQW"
+  static constexpr uint16_t ADMIN_CREDENTIALS_VERSION = 1;
+  static constexpr size_t ADMIN_PASSWORD_MIN_LENGTH = 8;
+  static constexpr size_t ADMIN_PASSWORD_MAX_LENGTH = 63;
+  static constexpr uint32_t AUTO_UPDATE_MAGIC = 0x4E4D5155U;  // "NMQU"
+  static constexpr uint16_t AUTO_UPDATE_VERSION = 1;
+  static constexpr size_t AUTO_UPDATE_VERSION_MAX_LENGTH = 23;
+  static constexpr size_t AUTO_UPDATE_URL_MAX_LENGTH = 255;
   static constexpr uint16_t STEINEL_COMPANY_ID = 0x0563;
   static constexpr uint16_t NIGHTMATIQ_PRODUCT_ID = 0x1DCE;
   static constexpr uint16_t FLAG_ENABLED = 0x0001;
@@ -190,6 +193,22 @@ class NightmatiqMesh final : public PollingComponent,
     std::array<uint8_t, 16> mesh_uuid{};
   };
 
+  struct StoredAdminCredentials {
+    uint32_t magic{ADMIN_CREDENTIALS_MAGIC};
+    uint16_t version{ADMIN_CREDENTIALS_VERSION};
+    char password[ADMIN_PASSWORD_MAX_LENGTH + 1]{};
+  };
+
+  struct StoredAutoUpdate {
+    uint32_t magic{AUTO_UPDATE_MAGIC};
+    uint16_t version{AUTO_UPDATE_VERSION};
+    uint16_t reserved{0};
+    uint32_t image_size{0};
+    char target_version[AUTO_UPDATE_VERSION_MAX_LENGTH + 1]{};
+    char url[AUTO_UPDATE_URL_MAX_LENGTH + 1]{};
+    std::array<uint8_t, 32> sha256{};
+  };
+
   struct StoredAdvertisedIdentity {
     uint32_t magic{ADVERTISED_IDENTITY_MAGIC};
     uint16_t version{ADVERTISED_IDENTITY_VERSION};
@@ -237,6 +256,7 @@ class NightmatiqMesh final : public PollingComponent,
   enum class CloudJob : uint8_t { DISCOVER, INSTALL };
   struct CloudBody;
   struct CloudTaskArgs;
+  struct AutoUpdateContext;
 
   bool initialize_bluetooth_();
   bool initialize_mesh_();
@@ -248,9 +268,21 @@ class NightmatiqMesh final : public PollingComponent,
   bool capture_advertised_identity_(const uint8_t *data, size_t length, int16_t rssi);
   void persist_pending_advertised_identity_();
   void advance_mesh_remove_();
+  void advance_factory_reset_();
   void monitor_iv_index_();
   bool load_config_();
   bool load_device_key_();
+  bool load_admin_credentials_();
+  bool save_admin_password_(const std::string &password);
+  void apply_admin_credentials_();
+  static bool valid_admin_password_(const std::string &password);
+  bool load_auto_update_();
+  bool save_auto_update_(const StoredAutoUpdate &update);
+  bool clear_auto_update_();
+  void advance_auto_update_();
+  void fail_auto_update_(const std::string &error);
+  static void auto_update_task_(void *parameter);
+  static esp_err_t auto_update_http_event_(esp_http_client_event_t *event);
   void load_retired_address_();
   void retire_local_address_();
   bool load_address_policy_();
@@ -268,6 +300,8 @@ class NightmatiqMesh final : public PollingComponent,
   void clear_advertised_identity_();
   bool advertised_identity_current_() const;
   bool resolve_firmware_version_(uint8_t &major, uint8_t &minor, uint8_t &patch) const;
+  bool parse_scan_result_(const esp32_ble::BLEScanResult &scan_result);
+  void finish_identity_scan_();
   bool save_config_(const StoredConfig &config);
   bool save_device_key_(const std::array<uint8_t, 16> &device_key);
   bool save_enabled_(bool enabled);
@@ -300,13 +334,18 @@ class NightmatiqMesh final : public PollingComponent,
   void handle_enable_(AsyncWebServerRequest *request);
   void handle_disable_(AsyncWebServerRequest *request);
   void handle_remove_(AsyncWebServerRequest *request);
+  void handle_factory_reset_(AsyncWebServerRequest *request);
   void handle_mode_(AsyncWebServerRequest *request);
   void handle_threshold_(AsyncWebServerRequest *request);
   void handle_refresh_(AsyncWebServerRequest *request);
+  void handle_password_(AsyncWebServerRequest *request);
+  void handle_auto_update_(AsyncWebServerRequest *request);
   static void send_json_(AsyncWebServerRequest *request, int code, const std::string &body);
   static bool parse_u32_(const std::string &value, uint32_t minimum, uint32_t maximum, uint32_t &output);
   static bool parse_hex_u16_(const std::string &value, uint16_t &output);
   static bool is_safe_uuid_(const std::string &value);
+  static bool parse_version_(const std::string &value, std::array<uint16_t, 3> &version);
+  static bool parse_sha256_(const std::string &value, std::array<uint8_t, 32> &digest);
   void set_status_(const std::string &status, bool publish = true);
   bool set_common_(esp_ble_mesh_client_common_param_t &common, esp_ble_mesh_model_t *model,
                    uint32_t opcode, uint16_t destination);
@@ -345,6 +384,7 @@ class NightmatiqMesh final : public PollingComponent,
   static NightmatiqMesh *instance_;
 
   web_server_base::WebServerBase *base_;
+  ESPHomeOTAComponent *ota_;
   ESPPreferenceObject config_preference_;
   ESPPreferenceObject device_key_preference_;
   ESPPreferenceObject retired_address_preference_;
@@ -352,6 +392,8 @@ class NightmatiqMesh final : public PollingComponent,
   ESPPreferenceObject address_confirmation_preference_;
   ESPPreferenceObject iv_cache_preference_;
   ESPPreferenceObject advertised_identity_preference_;
+  ESPPreferenceObject admin_credentials_preference_;
+  ESPPreferenceObject auto_update_preference_;
   StoredConfig config_{};
   std::array<uint8_t, 16> device_key_{};
   bool device_key_valid_{false};
@@ -367,18 +409,27 @@ class NightmatiqMesh final : public PollingComponent,
   bool mesh_start_pending_{false};
   std::atomic<bool> mesh_remove_pending_{false};
   uint32_t mesh_remove_not_before_{0};
+  std::atomic<bool> factory_reset_pending_{false};
+  uint32_t factory_reset_at_{0};
   uint32_t mesh_start_not_before_{0};
   uint32_t mesh_start_deadline_{0};
   std::atomic<bool> identity_scan_pending_{false};
   std::atomic<bool> identity_found_this_boot_{false};
   bool identity_scan_started_{false};
   enum class IdentityScanPhase : uint8_t {
-    WAIT_FOR_IDLE,
+    WAIT_FOR_BLE,
     WAIT_FOR_RANDOM_ADDRESS,
+    WAIT_FOR_SCAN_PARAMS,
     WAIT_FOR_SCAN_START,
     RUNNING,
+    WAIT_FOR_SCAN_STOP,
   };
-  IdentityScanPhase identity_scan_phase_{IdentityScanPhase::WAIT_FOR_IDLE};
+  IdentityScanPhase identity_scan_phase_{IdentityScanPhase::WAIT_FOR_BLE};
+  esp_ble_scan_params_t identity_scan_params_{};
+  std::atomic<bool> identity_scan_params_ready_{false};
+  std::atomic<bool> identity_scan_start_ready_{false};
+  std::atomic<bool> identity_scan_stop_ready_{false};
+  std::atomic<bool> identity_scan_command_error_{false};
   uint32_t identity_scan_action_at_{0};
   uint32_t identity_scan_deadline_{0};
   std::atomic<bool> advertised_identity_save_pending_{false};
@@ -402,11 +453,22 @@ class NightmatiqMesh final : public PollingComponent,
 
   std::string web_username_;
   std::string web_password_;
+  bool using_factory_admin_password_{true};
+  StoredAutoUpdate auto_update_{};
+  bool auto_update_mode_{false};
+  bool auto_update_api_shutdown_started_{false};
+  bool auto_update_ble_disable_started_{false};
+  uint32_t auto_update_stage_deadline_{0};
+  std::atomic<bool> auto_update_running_{false};
+  std::atomic<uint8_t> auto_update_progress_{0};
   std::mutex state_mutex_;
   std::string status_{"Configuration required"};
   std::vector<NetworkChoice> networks_;
   std::atomic<bool> cloud_busy_{false};
   std::atomic<CloudTaskArgs *> cloud_pending_args_{nullptr};
+  std::atomic<bool> cloud_api_shutdown_pending_{false};
+  std::atomic<bool> cloud_api_shutdown_started_{false};
+  std::atomic<uint32_t> cloud_api_shutdown_deadline_{0};
   std::atomic<bool> cloud_ble_pause_pending_{false};
   std::atomic<bool> cloud_ble_resume_pending_{false};
   std::atomic<uint32_t> cloud_ble_pause_deadline_{0};

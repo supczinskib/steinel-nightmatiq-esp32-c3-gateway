@@ -2,19 +2,20 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import (
     binary_sensor,
-    esp32_ble_tracker,
+    esp32_ble,
     number,
     select,
     sensor,
     text_sensor,
     web_server_base,
 )
+from esphome.components.esphome import ota as esphome_ota
 from esphome.components.web_server_base import CONF_WEB_SERVER_BASE_ID
 from esphome.const import CONF_ID
 
 CODEOWNERS = []
-DEPENDENCIES = ["esp32", "web_server", "esp32_ble_tracker"]
-AUTO_LOAD = ["binary_sensor", "number", "select", "sensor", "text_sensor", "web_server_base"]
+DEPENDENCIES = ["esp32", "web_server"]
+AUTO_LOAD = ["binary_sensor", "esp32_ble", "number", "select", "sensor", "text_sensor", "web_server_base"]
 
 CONF_LUX_SENSOR_ID = "lux_sensor_id"
 CONF_RSSI_SENSOR_ID = "rssi_sensor_id"
@@ -31,17 +32,20 @@ CONF_PRODUCT_ID_TEXT_SENSOR_ID = "product_id_text_sensor_id"
 CONF_EXTENDED_DIAGNOSTICS = "extended_diagnostics"
 CONF_WEB_USERNAME = "web_username"
 CONF_WEB_PASSWORD = "web_password"
+CONF_OTA_ID = "ota_id"
 
 nightmatiq_ns = cg.esphome_ns.namespace("nightmatiq_mesh")
 NightmatiqMesh = nightmatiq_ns.class_(
-    "NightmatiqMesh", cg.PollingComponent, esp32_ble_tracker.ESPBTDeviceListener
+    "NightmatiqMesh", cg.PollingComponent
 )
 
 
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(NightmatiqMesh),
+        cv.GenerateID(esp32_ble.CONF_BLE_ID): cv.use_id(esp32_ble.ESP32BLE),
         cv.GenerateID(CONF_WEB_SERVER_BASE_ID): cv.use_id(web_server_base.WebServerBase),
+        cv.Required(CONF_OTA_ID): cv.use_id(esphome_ota.ESPHomeOTAComponent),
         cv.Required(CONF_LUX_SENSOR_ID): cv.use_id(sensor.Sensor),
         cv.Required(CONF_RSSI_SENSOR_ID): cv.use_id(sensor.Sensor),
         cv.Required(CONF_THRESHOLD_NUMBER_ID): cv.use_id(number.Number),
@@ -56,11 +60,9 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Required(CONF_PRODUCT_ID_TEXT_SENSOR_ID): cv.use_id(text_sensor.TextSensor),
         cv.Optional(CONF_EXTENDED_DIAGNOSTICS, default=True): cv.boolean,
         cv.Required(CONF_WEB_USERNAME): cv.string_strict,
-        cv.Required(CONF_WEB_PASSWORD): cv.string_strict,
+        cv.Required(CONF_WEB_PASSWORD): cv.sensitive(cv.string_strict),
     }
-).extend(cv.polling_component_schema("30s")).extend(
-    esp32_ble_tracker.ESP_BLE_DEVICE_SCHEMA
-)
+).extend(cv.polling_component_schema("30s"))
 
 
 async def to_code(config):
@@ -68,9 +70,12 @@ async def to_code(config):
         cg.add_define("USE_NIGHTMATIQ_EXTENDED_DIAGNOSTICS")
 
     base = await cg.get_variable(config[CONF_WEB_SERVER_BASE_ID])
-    var = cg.new_Pvariable(config[CONF_ID], base)
+    ota = await cg.get_variable(config[CONF_OTA_ID])
+    var = cg.new_Pvariable(config[CONF_ID], base, ota)
     await cg.register_component(var, config)
-    await esp32_ble_tracker.register_ble_device(var, config)
+    ble = await cg.get_variable(config[esp32_ble.CONF_BLE_ID])
+    esp32_ble.register_gap_event_handler(ble, var)
+    esp32_ble.register_gap_scan_event_handler(ble, var)
 
     lux = await cg.get_variable(config[CONF_LUX_SENSOR_ID])
     rssi = await cg.get_variable(config[CONF_RSSI_SENSOR_ID])

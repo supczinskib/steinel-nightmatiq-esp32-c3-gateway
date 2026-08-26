@@ -18,32 +18,3 @@ find_esphome() {
   echo "ERROR: ESPHome was not found. Run scripts/01_install_esphome.sh" >&2
   return 1
 }
-
-require_secrets() {
-  local root="$1"
-  local secrets="$root/esphome/secrets.yaml"
-  if [[ ! -f "$secrets" ]]; then
-    echo "ERROR: esphome/secrets.yaml is missing. Run scripts/02_configure_secrets.sh" >&2
-    return 1
-  fi
-
-  local key
-  for key in wifi_ssid wifi_password ota_password fallback_ap_password web_server_username web_server_password; do
-    if ! grep -Eq "^[[:space:]]*${key}:" "$secrets"; then
-      echo "ERROR: required secret is missing: $key" >&2
-      return 1
-    fi
-  done
-}
-
-patch_esphome() {
-  local esphome_bin="$1"
-  local venv_python
-  venv_python="$(dirname "$esphome_bin")/python"
-  if [[ ! -x "$venv_python" ]]; then
-    echo "ERROR: cannot locate the Python interpreter belonging to $esphome_bin" >&2
-    return 1
-  fi
-  "$venv_python" "$(project_root)/scripts/patch_esphome_api.py"
-  "$venv_python" "$(project_root)/scripts/patch_esphome_ble_tracker.py"
-}
