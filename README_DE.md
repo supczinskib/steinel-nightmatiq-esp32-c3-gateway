@@ -188,7 +188,7 @@ Beim Netzwerkimport leitet jedes Gateway seine Mesh-Adressrichtlinie aus der gew
 
 ## Fallback-Zugangspunkt
 
-Ist das konfigurierte WLAN 90 Sekunden lang nicht verfügbar, startet das Gateway seinen kennwortgeschützten Zugangspunkt erneut. Verbinden Sie sich mit dem werkseitigen AP-Kennwort `12345678` und ändern Sie die WLAN-Konfiguration im Captive Portal. Die lokale Seite bleibt durch das auf dem Gerät festgelegte Administratorkennwort geschützt.
+Ist das konfigurierte WLAN 60 Sekunden lang nicht verfügbar, startet das Gateway seinen kennwortgeschützten Zugangspunkt erneut. Verbinden Sie sich mit dem werkseitigen AP-Kennwort `12345678` und ändern Sie die WLAN-Konfiguration im Captive Portal. Die lokale Seite bleibt durch das auf dem Gerät festgelegte Administratorkennwort geschützt.
 
 ## Fehlerbehebung
 

@@ -242,7 +242,7 @@ Sufiks MAC w nazwie urządzenia jest domyślnie włączony, dlatego wiele bramek
 
 ## Awaryjny punkt dostępowy
 
-Jeżeli skonfigurowana sieć Wi-Fi jest niedostępna przez 90 sekund, bramka ponownie uruchamia chroniony punkt dostępowy. Połącz się z nim fabrycznym hasłem AP `12345678` i zmień konfigurację Wi-Fi w portalu. Lokalna strona nadal jest chroniona hasłem administratora wybranym na urządzeniu.
+Jeżeli skonfigurowana sieć Wi-Fi jest niedostępna przez 60 sekund, bramka ponownie uruchamia chroniony punkt dostępowy. Połącz się z nim fabrycznym hasłem AP `12345678` i zmień konfigurację Wi-Fi w portalu. Lokalna strona nadal jest chroniona hasłem administratora wybranym na urządzeniu.
 
 ## Rozwiązywanie problemów
 

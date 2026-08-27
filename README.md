@@ -242,7 +242,7 @@ The MAC suffix in the device name is enabled by default, so multiple gateways re
 
 ## Fallback access point
 
-If the configured Wi-Fi network is unavailable for 90 seconds, the gateway starts its password-protected access point again. Connect using factory access-point password `12345678` and update the Wi-Fi configuration through the captive portal. The local page remains protected by the administrator password selected on the device.
+If the configured Wi-Fi network is unavailable for 60 seconds, the gateway starts its password-protected access point again. Connect using factory access-point password `12345678` and update the Wi-Fi configuration through the captive portal. The local page remains protected by the administrator password selected on the device.
 
 ## Troubleshooting
 
