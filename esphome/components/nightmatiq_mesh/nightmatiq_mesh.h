@@ -339,6 +339,7 @@ class NightmatiqMesh final : public PollingComponent, public AsyncWebHandler {
   void handle_threshold_(AsyncWebServerRequest *request);
   void handle_refresh_(AsyncWebServerRequest *request);
   void handle_password_(AsyncWebServerRequest *request);
+  void handle_wifi_(AsyncWebServerRequest *request);
   void handle_auto_update_(AsyncWebServerRequest *request);
   static void send_json_(AsyncWebServerRequest *request, int code, const std::string &body);
   static bool parse_u32_(const std::string &value, uint32_t minimum, uint32_t maximum, uint32_t &output);

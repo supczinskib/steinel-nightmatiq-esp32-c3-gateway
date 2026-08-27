@@ -28,6 +28,7 @@
 #include "esphome/core/version.h"
 #include "esphome/components/api/api_server.h"
 #include "esphome/components/network/util.h"
+#include "esphome/components/wifi/wifi_component.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
@@ -1403,7 +1404,8 @@ bool NightmatiqMesh::canHandle(AsyncWebServerRequest *request) const {
           url == "/steinel/disable" || url == "/steinel/remove" ||
           url == "/steinel/mode" || url == "/steinel/threshold" ||
           url == "/steinel/refresh" || url == "/steinel/password" ||
-          url == "/steinel/update" || url == "/steinel/factory-reset");
+          url == "/steinel/wifi" || url == "/steinel/update" ||
+          url == "/steinel/factory-reset");
 }
 
 void NightmatiqMesh::handleRequest(AsyncWebServerRequest *request) {
@@ -1421,6 +1423,7 @@ void NightmatiqMesh::handleRequest(AsyncWebServerRequest *request) {
   if (url == "/steinel/threshold") return this->handle_threshold_(request);
   if (url == "/steinel/refresh") return this->handle_refresh_(request);
   if (url == "/steinel/password") return this->handle_password_(request);
+  if (url == "/steinel/wifi") return this->handle_wifi_(request);
   if (url == "/steinel/update") return this->handle_auto_update_(request);
   if (url == "/steinel/factory-reset") return this->handle_factory_reset_(request);
   send_json_(request, 404, "{\"message\":\"Not found\"}");
@@ -1461,6 +1464,12 @@ void NightmatiqMesh::handle_status_(AsyncWebServerRequest *request) {
   body.append("\"");
   body.append(",\"factory_password\":");
   body.append(this->using_factory_admin_password_ ? "true" : "false");
+  body.append(",\"connected_ssid\":\"");
+  if (wifi::global_wifi_component != nullptr) {
+    const auto configured_sta = wifi::global_wifi_component->get_sta();
+    body.escaped(configured_sta.get_ssid().c_str());
+  }
+  body.append("\"");
   body.append(",\"gateway_version\":\"");
   body.append(ESPHOME_PROJECT_VERSION);
   const esp_partition_t *running_partition = esp_ota_get_running_partition();
@@ -1789,6 +1798,40 @@ void NightmatiqMesh::handle_password_(AsyncWebServerRequest *request) {
   this->reboot_at_ = millis() + 2000;
   this->reboot_pending_.store(true);
   send_json_(request, 200, "{\"message\":\"Password changed; sign in again after restart\"}");
+}
+
+void NightmatiqMesh::handle_wifi_(AsyncWebServerRequest *request) {
+  if (this->cloud_busy_.load() || this->auto_update_running_.load() ||
+      this->reboot_pending_.load())
+    return send_json_(request, 409, "{\"message\":\"Gateway is busy\"}");
+
+  std::string ssid = request->arg("ssid").c_str();
+  std::string password = request->arg("password").c_str();
+  const bool valid_ssid = !ssid.empty() && ssid.size() <= 32 &&
+                          ssid.find('\0') == std::string::npos;
+  const bool valid_password = password.size() >= 8 && password.size() <= 63 &&
+                              std::all_of(password.begin(), password.end(), [](unsigned char value) {
+                                return value >= 0x20 && value <= 0x7E;
+                              });
+  if (!valid_ssid || !valid_password) {
+    std::fill(password.begin(), password.end(), '\0');
+    return send_json_(request, 400,
+                      "{\"message\":\"SSID must contain 1-32 bytes and the Wi-Fi password must contain 8-63 printable characters\"}");
+  }
+  if (wifi::global_wifi_component == nullptr) {
+    std::fill(password.begin(), password.end(), '\0');
+    return send_json_(request, 500, "{\"message\":\"Wi-Fi component is not available\"}");
+  }
+
+  this->defer([this, ssid = std::move(ssid), password = std::move(password)]() mutable {
+    wifi::global_wifi_component->save_wifi_sta(ssid, password);
+    std::fill(password.begin(), password.end(), '\0');
+    this->set_status_("Wi-Fi configuration changed; restarting gateway");
+    this->reboot_at_ = millis() + 2000;
+    this->reboot_pending_.store(true);
+  });
+  send_json_(request, 200,
+             "{\"message\":\"Wi-Fi configuration saved; gateway is restarting\"}");
 }
 
 void NightmatiqMesh::handle_auto_update_(AsyncWebServerRequest *request) {

@@ -55,8 +55,8 @@ for path in \
 done
 
 for marker in \
-  'project_version: "1.1.0"' \
-  '## 1.1.0'; do
+  'project_version: "1.1.1"' \
+  '## 1.1.1'; do
   if grep -Fq "$marker" "$CONFIG" "$ROOT_DIR/CHANGELOG.md"; then
     ok "release marker: $marker"
   else
@@ -108,7 +108,8 @@ for marker in \
   'id: nightmatiq_ota' \
   'password: ""' \
   'password: "${factory_password}"' \
-  'ap_timeout: 90s' \
+  'channel: 6' \
+  'ap_timeout: 60s' \
   'captive_portal:' \
   'mdns:' \
   'disabled: false' \
@@ -235,10 +236,14 @@ for source, marker in (
     (web_source, 'url == "/steinel/threshold"'),
     (web_source, 'url == "/steinel/refresh"'),
     (web_source, 'url == "/steinel/password"'),
+    (web_source, 'url == "/steinel/wifi"'),
     (web_source, "handle_mode_"),
     (web_source, "handle_threshold_"),
     (web_source, "handle_refresh_"),
     (web_source, "handle_password_"),
+    (web_source, "handle_wifi_"),
+    (web_source, "global_wifi_component->save_wifi_sta"),
+    (web_source, r'\"connected_ssid\"'),
     (web_source, "save_admin_password_"),
     (web_source, "RELEASE_DOWNLOAD_PREFIX"),
     (web_source, "auto_update_task_"),
@@ -277,7 +282,12 @@ for source, marker in (
     (page_source, "Gateway administration"),
     (page_source, "Factory reset"),
     (page_source, '<div class="maintenance-section"><h3>Administrator access</h3>'),
+    (page_source, '<div class="maintenance-section"><h3>Wi-Fi network</h3>'),
     (page_source, '<div class="maintenance-section"><h3>Factory reset</h3>'),
+    (page_source, "SAVE WI-FI AND RESTART"),
+    (page_source, 'placeholder="********"'),
+    (page_source, "/steinel/wifi"),
+    (page_source, r'!/^[\x20-\x7E]+$/.test(password)'),
     (page_source, "FACTORY RESET GATEWAY"),
     (page_source, "Type RESET to confirm"),
     (page_source, "/steinel/factory-reset"),

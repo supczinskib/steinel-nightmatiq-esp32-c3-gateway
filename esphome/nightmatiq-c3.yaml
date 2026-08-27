@@ -3,7 +3,7 @@ substitutions:
   friendly_name: "Steinel NightmatIQ Plus"
   device_description: "Standalone Steinel NightmatIQ Plus gateway for ESP32-C3"
   project_name: "envpl.steinel_nightmatiq_gateway"
-  project_version: "1.1.0"
+  project_version: "1.1.1"
   factory_username: "admin"
   factory_password: "12345678"
 
@@ -148,7 +148,8 @@ wifi:
   power_save_mode: NONE
   ap:
     password: "${factory_password}"
-    ap_timeout: 90s
+    channel: 6
+    ap_timeout: 60s
 
 captive_portal:
 

@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.1.1 — 2026-08-27
+
+- Wi-Fi credentials can now be changed from the local gateway administration page.
+- The configured SSID is displayed without exposing the saved Wi-Fi password.
+- The standard ESPHome captive portal starts after 60 seconds when the configured Wi-Fi network is unavailable.
+- The fallback access point uses channel 6 for predictable discovery and connection.
+
 ## 1.1.0 — 2026-08-26
 
 - One universal firmware image for every supported ESP32-C3 board.
