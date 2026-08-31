@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="{{ page.lang | default: site.lang | default: "en-US" }}">
+  <head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+{% seo %}
+
+    <link rel="stylesheet" href="{{ "/assets/css/style.css?v=" | append: site.github.build_revision | relative_url }}">
+    <style>
+      .markdown-body .github-link,
+      .markdown-body .github-link:visited {
+        display: inline-block;
+        padding: 6px 12px;
+        color: #ffffff;
+        font-weight: 600;
+        line-height: 20px;
+        text-decoration: none;
+        background-color: #0366d6;
+        border: 1px solid #d0d7de;
+        border-radius: 6px;
+        box-shadow: 0 1px 0 rgba(27, 31, 36, 0.04);
+      }
+
+      .markdown-body .github-link:hover {
+        color: #ffffff;
+        text-decoration: none;
+        background-color: #0256b9;
+      }
+    </style>
+{% include head-custom.html %}
+  </head>
+  <body>
+    <div class="container-lg px-3 my-5 markdown-body">
+      <nav class="text-right mb-4" aria-label="Project">
+        <a class="github-link" href="https://github.com/supczinskib/steinel-nightmatiq-esp32-c3-gateway">View on GitHub</a>
+      </nav>
+
+      {{ content }}
+
+{% if site.github.private != true and site.github.license %}
+      <div class="footer border-top border-gray-light mt-5 pt-3 text-right text-gray">
+        This site is open source. {% github_edit_link "Improve this page" %}.
+      </div>
+{% endif %}
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/anchor-js/4.1.0/anchor.min.js" integrity="sha256-lZaRhKri35AyJSypXXs4o6OPFTbTmUoltBbDCbdzegg=" crossorigin="anonymous"></script>
+    <script>anchors.add();</script>
+  </body>
+</html>
